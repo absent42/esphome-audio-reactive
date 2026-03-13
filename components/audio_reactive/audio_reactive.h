@@ -64,12 +64,9 @@ class AudioReactiveComponent : public Component {
     volatile size_t samples_collected_{0};
     volatile bool processing_{false};
     bool mic_started_{false};
-    uint32_t callback_count_{0};
 
-    // Timing & debug
+    // Timing
     uint32_t last_process_ms_{0};
-    uint32_t last_debug_ms_{0};
-    uint32_t process_count_{0};
     uint32_t last_bpm_publish_ms_{0};
     static constexpr uint32_t BPM_PUBLISH_INTERVAL_MS = 3000;
 

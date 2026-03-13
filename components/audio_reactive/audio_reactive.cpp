@@ -31,23 +31,6 @@ void AudioReactiveComponent::setup() {
     if (mic_ != nullptr) {
         mic_->add_data_callback([this](const std::vector<uint8_t> &data) {
             if (processing_) return;  // Skip while main loop is reading the buffer
-            if (callback_count_++ < 3) {
-                ESP_LOGI(TAG, "Callback #%u: %u bytes", callback_count_, data.size());
-                // Dump raw bytes and sample interpretations to diagnose format
-                if (data.size() >= 16) {
-                    ESP_LOGI(TAG, "  raw hex: %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x",
-                             data[0], data[1], data[2], data[3],
-                             data[4], data[5], data[6], data[7],
-                             data[8], data[9], data[10], data[11],
-                             data[12], data[13], data[14], data[15]);
-                    const int16_t *s16 = reinterpret_cast<const int16_t *>(data.data());
-                    const int32_t *s32 = reinterpret_cast<const int32_t *>(data.data());
-                    ESP_LOGI(TAG, "  as int16: %d %d %d %d %d %d %d %d",
-                             s16[0], s16[1], s16[2], s16[3], s16[4], s16[5], s16[6], s16[7]);
-                    ESP_LOGI(TAG, "  as int32: %ld %ld %ld %ld",
-                             (long)s32[0], (long)s32[1], (long)s32[2], (long)s32[3]);
-                }
-            }
             const int16_t *samples = reinterpret_cast<const int16_t *>(data.data());
             size_t sample_count = data.size() / sizeof(int16_t);
             for (size_t i = 0; i < sample_count && samples_collected_ < FFT_SIZE; i++) {
@@ -83,13 +66,6 @@ void AudioReactiveComponent::loop() {
         last_process_ms_ = now;
     }
 
-    // Periodic debug: log sample collection progress every 5s
-    if ((now - last_debug_ms_) >= 5000) {
-        ESP_LOGI(TAG, "Debug: samples_collected=%u/%u, callbacks=%u, processed=%u",
-                 (unsigned)samples_collected_, FFT_SIZE, callback_count_, process_count_);
-        last_debug_ms_ = now;
-    }
-
     // Turn off beat binary sensor after pulse duration
     if (beat_on_ms_ > 0 && (now - beat_on_ms_) >= BEAT_PULSE_DURATION_MS) {
         if (beat_sensor_ != nullptr) {
@@ -101,7 +77,6 @@ void AudioReactiveComponent::loop() {
 
 void AudioReactiveComponent::process_audio_() {
     uint32_t now = millis();
-    process_count_++;
 
     // FFT
     fft_->process(sample_buffer_);
@@ -119,14 +94,6 @@ void AudioReactiveComponent::process_audio_() {
     float norm_mid = agc_mid_->normalize(bands.mid);
     float norm_high = agc_high_->normalize(bands.high);
     float norm_amp = agc_amp_->normalize(bands.amplitude);
-
-    // Debug: log first 5 process cycles and then every 100th
-    if (process_count_ <= 5 || process_count_ % 100 == 0) {
-        ESP_LOGI(TAG, "Process #%u: raw bass=%.4f mid=%.4f high=%.4f amp=%.4f",
-                 process_count_, bands.bass, bands.mid, bands.high, bands.amplitude);
-        ESP_LOGI(TAG, "  normalized bass=%.3f mid=%.3f high=%.3f amp=%.3f",
-                 norm_bass, norm_mid, norm_high, norm_amp);
-    }
 
     // Beat detection
     bool is_beat = beat_det_->update(norm_bass, now);

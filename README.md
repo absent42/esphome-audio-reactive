@@ -35,6 +35,29 @@ Add to your ESPHome YAML:
 
 See `atom-echo.yaml` for a complete config.
 
+### Security (recommended)
+
+After installing, add API encryption and an OTA password to your device config.
+If you use the ESPHome Dashboard (Home Assistant add-on), it generates encryption
+keys automatically when you add the `encryption:` block.
+
+Add these to your YAML:
+
+    api:
+      encryption:
+        key: !secret api_encryption_key
+
+    ota:
+      - platform: esphome
+        password: !secret ota_password
+
+Then add matching values to your `secrets.yaml` (managed by the ESPHome Dashboard,
+or created manually alongside your device YAML).
+
+API encryption secures communication between the device and Home Assistant.
+The OTA password prevents unauthorized over-the-network firmware updates.
+Neither affects the USB web installer.
+
 ## Exposed Entities
 
 | Entity | Type | Update Rate | Description |
@@ -55,7 +78,7 @@ See `atom-echo.yaml` for a complete config.
 
 ## How It Works
 
-1. I2S microphone captures audio at ~10kHz sample rate
+1. I2S microphone captures audio at 16kHz sample rate
 2. 512-sample FFT (ArduinoFFT) produces frequency bin magnitudes
 3. Bins grouped into bass (20-350 Hz), mid (350-2kHz), high (2-5kHz) bands
 4. AGC normalizes energy values to 0-1 against rolling ambient level
