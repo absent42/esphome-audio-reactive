@@ -1,0 +1,15 @@
+{
+    "name": "Audio Reactive Sensor (ATOM Echo)",
+    "version": "1.0.0",
+    "builds": [
+        {
+            "chipFamily": "ESP32",
+            "parts": [
+                {
+                    "path": "firmware/atom-echo.factory.bin",
+                    "offset": 0
+                }
+            ]
+        }
+    ]
+}

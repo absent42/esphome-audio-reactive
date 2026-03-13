@@ -1,0 +1,65 @@
+# example-atom-echo.yaml
+# Audio-reactive ESPHome config for M5Stack ATOM Echo
+# Provides beat detection, frequency analysis, and BPM for
+# Aqara Advanced Lighting audio-reactive dynamic scenes.
+
+esphome:
+  name: audio-reactive
+  friendly_name: Audio Reactive Sensor
+
+esp32:
+  board: m5stack-atom
+  framework:
+    type: arduino
+
+wifi:
+
+improv_serial:
+
+api:
+
+logger:
+  level: INFO
+
+external_components:
+  - source: github://absent42/esphome-audio-reactive
+    components: [audio_reactive]
+
+i2s_audio:
+  i2s_lrclk_pin: GPIO33
+  i2s_bclk_pin: GPIO19
+
+microphone:
+  - platform: i2s_audio
+    id: mic
+    adc_type: external
+    i2s_din_pin: GPIO23
+    pdm: true
+    sample_rate: 10000
+    bits_per_sample: 16bit
+
+audio_reactive:
+  id: audio_analysis
+  microphone: mic
+  update_interval: 50ms
+  beat_sensitivity: 50
+
+sensor:
+  - platform: audio_reactive
+    audio_reactive_id: audio_analysis
+    bass_energy:
+      name: "Bass Energy"
+    mid_energy:
+      name: "Mid Energy"
+    high_energy:
+      name: "High Energy"
+    amplitude:
+      name: "Amplitude"
+    bpm:
+      name: "BPM"
+
+binary_sensor:
+  - platform: audio_reactive
+    audio_reactive_id: audio_analysis
+    beat_detected:
+      name: "Beat Detected"

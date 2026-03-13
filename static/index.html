@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Audio Reactive Sensor - Install</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script
+        type="module"
+        src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"
+    ></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 600px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            color: #333;
+        }
+        h1 { font-size: 1.5rem; }
+        .device-card {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin: 1rem 0;
+        }
+        .device-card h2 { margin-top: 0; font-size: 1.1rem; }
+        esp-web-install-button {
+            display: block;
+            margin-top: 1rem;
+        }
+        esp-web-install-button button {
+            background: #03a9f4;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 4px;
+            font-size: 1rem;
+            cursor: pointer;
+        }
+        esp-web-install-button button:hover {
+            background: #0288d1;
+        }
+    </style>
+</head>
+<body>
+    <h1>Audio Reactive Sensor</h1>
+    <p>
+        Flash your ESP32 device with the audio-reactive firmware for use with
+        <a href="https://github.com/absent42/aqara-advanced-lighting">Aqara Advanced Lighting</a>.
+        Connect your device via USB and click Install.
+    </p>
+
+    <div class="device-card">
+        <h2>M5Stack ATOM Echo</h2>
+        <p>~$13, built-in PDM microphone, USB-C. Primary recommended device.</p>
+        <esp-web-install-button manifest="manifest-atom-echo.json">
+            <button slot="activate">Install on ATOM Echo</button>
+        </esp-web-install-button>
+    </div>
+
+    <p>
+        <strong>Note:</strong> After flashing, connect to the "audio-reactive" WiFi
+        hotspot to configure your network credentials. The device will then appear
+        in Home Assistant automatically.
+    </p>
+
+    <h2>Advanced: Manual ESPHome Setup</h2>
+    <p>
+        If you prefer to compile yourself or need a custom configuration,
+        see the <a href="https://github.com/absent42/esphome-audio-reactive#installation">README</a>
+        for ESPHome external component setup.
+    </p>
+</body>
+</html>
