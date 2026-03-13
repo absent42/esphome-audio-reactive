@@ -78,6 +78,20 @@ class BeatDetector {
     /// Current dynamic threshold (for diagnostics).
     float current_threshold() const { return threshold_; }
 
+    /// Update sensitivity at runtime with partial reset.
+    /// Recalculates multiplier, clears BPM intervals, preserves energy window.
+    void set_sensitivity(int sensitivity) {
+        int clamped = std::max(1, std::min(100, sensitivity));
+        multiplier_ = 3.0f - (static_cast<float>(clamped) / 100.0f) * 2.5f;
+        beat_intervals_.clear();
+        // Recompute threshold with new multiplier if we have enough samples
+        if (samples_.size() >= window_size_ / 2) {
+            threshold_ = compute_threshold();
+        } else {
+            threshold_ = 0.0f;
+        }
+    }
+
     /// Timestamp of the most recent detected beat (0 if none yet).
     uint32_t last_beat_ms() const { return last_beat_ms_; }
 

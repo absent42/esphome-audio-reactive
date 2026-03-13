@@ -92,6 +92,48 @@ void test_bpm_tracking() {
     printf("PASS: test_bpm_tracking (bpm=%.1f)\n", bpm);
 }
 
+void test_set_sensitivity_partial_reset() {
+    BeatDetector det(50, 10, 150);
+    // Build up rolling window and trigger a beat
+    for (int i = 0; i < 15; i++) {
+        det.update(0.1f, i * 50);
+    }
+    det.update(0.9f, 800);  // trigger beat, creates interval
+
+    float old_threshold = det.current_threshold();
+    float old_bpm = det.current_bpm();
+    assert(old_bpm == 0.0f);  // only 1 beat, need 3+ intervals for BPM
+
+    // Trigger more beats to get BPM
+    for (int i = 0; i < 5; i++) {
+        det.update(0.1f, 810 + i * 50);
+    }
+    det.update(0.9f, 1300);
+    for (int i = 0; i < 5; i++) {
+        det.update(0.1f, 1310 + i * 50);
+    }
+    det.update(0.9f, 1800);
+    for (int i = 0; i < 5; i++) {
+        det.update(0.1f, 1810 + i * 50);
+    }
+    det.update(0.9f, 2300);
+    assert(det.current_bpm() > 0.0f);  // now we have intervals
+
+    // Change sensitivity
+    det.set_sensitivity(90);  // higher sensitivity = lower multiplier
+
+    // BPM should be reset (intervals cleared)
+    assert(det.current_bpm() == 0.0f);
+
+    // Threshold should still compute (samples preserved, no warmup needed)
+    float new_threshold = det.current_threshold();
+    assert(new_threshold > 0.0f);
+    // Higher sensitivity means lower threshold
+    assert(new_threshold < old_threshold);
+
+    printf("PASS: test_set_sensitivity_partial_reset\n");
+}
+
 int main() {
     test_no_beat_during_warmup();
     test_beat_on_bass_spike();
@@ -99,6 +141,7 @@ int main() {
     test_min_interval_enforced();
     test_sensitivity_affects_threshold();
     test_bpm_tracking();
+    test_set_sensitivity_partial_reset();
     printf("All beat detector tests passed.\n");
     return 0;
 }
