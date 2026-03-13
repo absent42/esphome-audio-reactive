@@ -113,10 +113,8 @@ void AudioReactiveComponent::process_audio_() {
     // Publish BPM periodically (not every cycle — noisy at high frequency)
     if (bpm_sensor_ != nullptr &&
         (now - last_bpm_publish_ms_) >= BPM_PUBLISH_INTERVAL_MS) {
-        float bpm = beat_det_->current_bpm();
-        if (bpm > 0.0f) {
-            bpm_sensor_->publish_state(bpm);
-        }
+        float bpm = beat_det_->current_bpm(now);
+        bpm_sensor_->publish_state(bpm);
         last_bpm_publish_ms_ = now;
     }
 }

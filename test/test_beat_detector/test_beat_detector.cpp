@@ -2,7 +2,7 @@
 #include <cmath>
 #include <cstdio>
 
-#include "../components/audio_reactive/beat_detector.h"
+#include "../../components/audio_reactive/beat_detector.h"
 
 using namespace esphome::audio_reactive;
 

@@ -4,7 +4,7 @@ import esphome.config_validation as cv
 from esphome.const import CONF_ID
 
 CODEOWNERS = ["@absent42"]
-DEPENDENCIES = ["microphone", "i2s_audio"]
+DEPENDENCIES = ["microphone"]
 
 audio_reactive_ns = cg.esphome_ns.namespace("audio_reactive")
 AudioReactiveComponent = audio_reactive_ns.class_(

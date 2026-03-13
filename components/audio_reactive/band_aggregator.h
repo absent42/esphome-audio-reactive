@@ -21,10 +21,10 @@ struct BandBinRanges {
 };
 
 struct BandEnergies {
-    float bass;       // 0.0-1.0 normalized bass energy
-    float mid;        // 0.0-1.0 normalized mid energy
-    float high;       // 0.0-1.0 normalized high energy
-    float amplitude;  // 0.0-1.0 overall normalized amplitude
+    float bass;       // Raw RMS bass energy (normalized to 0-1 by AGC later)
+    float mid;        // Raw RMS mid energy
+    float high;       // Raw RMS high energy
+    float amplitude;  // Raw RMS overall amplitude
 };
 
 /// Groups FFT magnitude bins into bass/mid/high energy bands.

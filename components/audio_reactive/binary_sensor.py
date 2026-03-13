@@ -12,7 +12,9 @@ CONF_BEAT_DETECTED = "beat_detected"
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(CONF_AUDIO_REACTIVE_ID): cv.use_id(AudioReactiveComponent),
-        cv.Optional(CONF_BEAT_DETECTED): binary_sensor.binary_sensor_schema(),
+        cv.Optional(CONF_BEAT_DETECTED): binary_sensor.binary_sensor_schema(
+            icon="mdi:music-note",
+        ),
     }
 )
 

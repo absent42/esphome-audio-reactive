@@ -2,7 +2,7 @@
 #include <cmath>
 #include <cstdio>
 
-#include "../components/audio_reactive/agc.h"
+#include "../../components/audio_reactive/agc.h"
 
 using namespace esphome::audio_reactive;
 

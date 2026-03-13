@@ -78,9 +78,17 @@ class BeatDetector {
     /// Current dynamic threshold (for diagnostics).
     float current_threshold() const { return threshold_; }
 
-    /// Estimated BPM from recent beat intervals. Returns 0 if insufficient data.
-    float current_bpm() const {
+    /// Timestamp of the most recent detected beat (0 if none yet).
+    uint32_t last_beat_ms() const { return last_beat_ms_; }
+
+    /// Estimated BPM from recent beat intervals.
+    /// Returns 0 if insufficient data or no beat within @p stale_ms of @p now_ms.
+    float current_bpm(uint32_t now_ms = 0, uint32_t stale_ms = 5000) const {
         if (beat_intervals_.size() < 3) return 0.0f;
+        if (now_ms > 0 && last_beat_ms_ > 0 &&
+            (now_ms - last_beat_ms_) > stale_ms) {
+            return 0.0f;
+        }
         // Use median interval for robustness against outliers
         std::vector<uint32_t> sorted = beat_intervals_;
         std::sort(sorted.begin(), sorted.end());

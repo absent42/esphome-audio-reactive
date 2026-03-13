@@ -21,22 +21,27 @@ CONFIG_SCHEMA = cv.Schema(
         cv.GenerateID(CONF_AUDIO_REACTIVE_ID): cv.use_id(AudioReactiveComponent),
         cv.Optional(CONF_BASS_ENERGY): sensor.sensor_schema(
             accuracy_decimals=3,
+            icon="mdi:equalizer",
             state_class=STATE_CLASS_MEASUREMENT,
         ),
         cv.Optional(CONF_MID_ENERGY): sensor.sensor_schema(
             accuracy_decimals=3,
+            icon="mdi:equalizer",
             state_class=STATE_CLASS_MEASUREMENT,
         ),
         cv.Optional(CONF_HIGH_ENERGY): sensor.sensor_schema(
             accuracy_decimals=3,
+            icon="mdi:equalizer",
             state_class=STATE_CLASS_MEASUREMENT,
         ),
         cv.Optional(CONF_AMPLITUDE): sensor.sensor_schema(
             accuracy_decimals=3,
+            icon="mdi:volume-high",
             state_class=STATE_CLASS_MEASUREMENT,
         ),
         cv.Optional(CONF_BPM): sensor.sensor_schema(
             accuracy_decimals=0,
+            icon="mdi:metronome",
             unit_of_measurement="BPM",
             state_class=STATE_CLASS_MEASUREMENT,
         ),

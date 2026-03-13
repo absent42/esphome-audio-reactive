@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "agc.h"
 #include "band_aggregator.h"
 #include "beat_detector.h"
@@ -48,8 +50,8 @@ class AudioReactiveComponent : public Component {
     sensor::Sensor *bpm_sensor_{nullptr};
     binary_sensor::BinarySensor *beat_sensor_{nullptr};
 
-    // DSP pipeline — FFT size hardcoded to 512 (spec recommendation:
-    // 512 samples at 10kHz gives ~20Hz resolution, sufficient for bass band)
+    // DSP pipeline — FFT size hardcoded to 512
+    // 512 samples at 16kHz gives ~31Hz resolution, sufficient for bass band
     static constexpr size_t FFT_SIZE = 512;
     FFTProcessor<FFT_SIZE> *fft_{nullptr};
     BandAggregator *band_agg_{nullptr};
@@ -61,8 +63,8 @@ class AudioReactiveComponent : public Component {
 
     // Audio buffer (written by I2S callback task, read by main loop)
     float *sample_buffer_{nullptr};
-    volatile size_t samples_collected_{0};
-    volatile bool processing_{false};
+    std::atomic<size_t> samples_collected_{0};
+    std::atomic<bool> processing_{false};
     bool mic_started_{false};
 
     // Timing
