@@ -35,28 +35,28 @@ class FFTProcessor {
     void process(const float* samples) {
         // Copy to working buffers
         for (size_t i = 0; i < N; i++) {
-            real_[i] = static_cast<double>(samples[i]);
-            imag_[i] = 0.0;
+            real_[i] = samples[i];
+            imag_[i] = 0.0f;
         }
 
 #ifdef AUDIO_REACTIVE_NATIVE_TEST
         // Minimal DFT for testing (slow but correct, no library dependency)
         for (size_t k = 0; k < N / 2; k++) {
-            double sum_re = 0.0, sum_im = 0.0;
+            float sum_re = 0.0f, sum_im = 0.0f;
             for (size_t n = 0; n < N; n++) {
-                double angle = 2.0 * M_PI * k * n / N;
-                sum_re += real_[n] * cos(angle);
-                sum_im -= real_[n] * sin(angle);
+                float angle = 2.0f * static_cast<float>(M_PI) * k * n / N;
+                sum_re += real_[n] * cosf(angle);
+                sum_im -= real_[n] * sinf(angle);
             }
-            magnitudes_[k] = static_cast<float>(sqrt(sum_re * sum_re + sum_im * sum_im) / N);
+            magnitudes_[k] = sqrtf(sum_re * sum_re + sum_im * sum_im) / N;
         }
 #else
-        ArduinoFFT<double> fft(real_, imag_, N, sample_rate_);
+        ArduinoFFT<float> fft(real_, imag_, N, sample_rate_);
         fft.windowing(FFTWindow::Hamming, FFTDirection::Forward);
         fft.compute(FFTDirection::Forward);
         fft.complexToMagnitude();
         for (size_t i = 0; i < N / 2; i++) {
-            magnitudes_[i] = static_cast<float>(real_[i]);
+            magnitudes_[i] = real_[i];
         }
 #endif
     }
@@ -66,8 +66,8 @@ class FFTProcessor {
 
  private:
     float sample_rate_;
-    double real_[N]{};
-    double imag_[N]{};
+    float real_[N]{};
+    float imag_[N]{};
     float magnitudes_[N / 2]{};
 };
 
