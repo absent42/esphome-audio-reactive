@@ -31,6 +31,20 @@ void AudioReactiveComponent::setup() {
             if (processing_) return;  // Skip while main loop is reading the buffer
             if (callback_count_++ < 3) {
                 ESP_LOGI(TAG, "Callback #%u: %u bytes", callback_count_, data.size());
+                // Dump raw bytes and sample interpretations to diagnose format
+                if (data.size() >= 16) {
+                    ESP_LOGI(TAG, "  raw hex: %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x",
+                             data[0], data[1], data[2], data[3],
+                             data[4], data[5], data[6], data[7],
+                             data[8], data[9], data[10], data[11],
+                             data[12], data[13], data[14], data[15]);
+                    const int16_t *s16 = reinterpret_cast<const int16_t *>(data.data());
+                    const int32_t *s32 = reinterpret_cast<const int32_t *>(data.data());
+                    ESP_LOGI(TAG, "  as int16: %d %d %d %d %d %d %d %d",
+                             s16[0], s16[1], s16[2], s16[3], s16[4], s16[5], s16[6], s16[7]);
+                    ESP_LOGI(TAG, "  as int32: %ld %ld %ld %ld",
+                             (long)s32[0], (long)s32[1], (long)s32[2], (long)s32[3]);
+                }
             }
             const int32_t *samples = reinterpret_cast<const int32_t *>(data.data());
             size_t sample_count = data.size() / sizeof(int32_t);
