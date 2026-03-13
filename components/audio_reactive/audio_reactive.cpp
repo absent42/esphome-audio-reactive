@@ -46,11 +46,11 @@ void AudioReactiveComponent::setup() {
                              (long)s32[0], (long)s32[1], (long)s32[2], (long)s32[3]);
                 }
             }
-            const int32_t *samples = reinterpret_cast<const int32_t *>(data.data());
-            size_t sample_count = data.size() / sizeof(int32_t);
+            const int16_t *samples = reinterpret_cast<const int16_t *>(data.data());
+            size_t sample_count = data.size() / sizeof(int16_t);
             for (size_t i = 0; i < sample_count && samples_collected_ < FFT_SIZE; i++) {
                 sample_buffer_[samples_collected_++] =
-                    static_cast<float>(samples[i]) / 2147483648.0f;
+                    static_cast<float>(samples[i]) / 32768.0f;
             }
         });
     } else {

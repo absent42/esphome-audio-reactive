@@ -10,7 +10,7 @@ esphome:
 esp32:
   board: m5stack-atom
   framework:
-    type: arduino
+    type: esp-idf
 
 wifi:
 
@@ -36,8 +36,8 @@ microphone:
     i2s_din_pin: GPIO23
     pdm: true
     sample_rate: 16000
-    bits_per_sample: 32bit
-    channel: left
+    bits_per_sample: 16bit
+    channel: right
 
 audio_reactive:
   id: audio_analysis
