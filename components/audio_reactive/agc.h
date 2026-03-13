@@ -29,6 +29,13 @@ class AGC {
         return std::max(0.0f, std::min(1.0f, norm));
     }
 
+    void reset() {
+        samples_.clear();
+        min_ = 0.0f;
+        max_ = 0.0f;
+        range_ = 0.0f;
+    }
+
     float current_min() const { return min_; }
     float current_max() const { return max_; }
 

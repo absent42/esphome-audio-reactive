@@ -11,7 +11,7 @@ void AudioReactiveComponent::setup() {
     ESP_LOGCONFIG(TAG, "Setting up AudioReactive...");
 
     // Allocate DSP pipeline
-    float sample_rate = 10000.0f;  // I2S configured for ~10kHz
+    float sample_rate = 16000.0f;  // I2S configured for 16kHz
     fft_ = new FFTProcessor<FFT_SIZE>(sample_rate);
     float freq_res = sample_rate / static_cast<float>(FFT_SIZE);
     band_agg_ = new BandAggregator(freq_res);
@@ -32,11 +32,11 @@ void AudioReactiveComponent::setup() {
             if (callback_count_++ < 3) {
                 ESP_LOGI(TAG, "Callback #%u: %u bytes", callback_count_, data.size());
             }
-            const int16_t *samples = reinterpret_cast<const int16_t *>(data.data());
-            size_t sample_count = data.size() / sizeof(int16_t);
+            const int32_t *samples = reinterpret_cast<const int32_t *>(data.data());
+            size_t sample_count = data.size() / sizeof(int32_t);
             for (size_t i = 0; i < sample_count && samples_collected_ < FFT_SIZE; i++) {
                 sample_buffer_[samples_collected_++] =
-                    static_cast<float>(samples[i]) / 32768.0f;
+                    static_cast<float>(samples[i]) / 2147483648.0f;
             }
         });
     } else {
@@ -134,6 +134,16 @@ void AudioReactiveComponent::process_audio_() {
         }
         last_bpm_publish_ms_ = now;
     }
+}
+
+void AudioReactiveComponent::reset_agc() {
+    ESP_LOGI(TAG, "AGC reset: bass range was [%.4f, %.4f], amp range was [%.4f, %.4f]",
+             agc_bass_->current_min(), agc_bass_->current_max(),
+             agc_amp_->current_min(), agc_amp_->current_max());
+    agc_bass_->reset();
+    agc_amp_->reset();
+    beat_det_->reset();
+    ESP_LOGI(TAG, "AGC and beat detector reset — re-calibrating");
 }
 
 void AudioReactiveComponent::dump_config() {

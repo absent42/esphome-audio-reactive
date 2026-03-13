@@ -33,7 +33,7 @@ Add to your ESPHome YAML:
       - source: github://absent42/esphome-audio-reactive
         components: [audio_reactive]
 
-See `example-atom-echo.yaml` for a complete config.
+See `atom-echo.yaml` for a complete config.
 
 ## Exposed Entities
 

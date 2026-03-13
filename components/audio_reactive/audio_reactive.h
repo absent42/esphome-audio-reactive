@@ -32,6 +32,9 @@ class AudioReactiveComponent : public Component {
     void set_bpm_sensor(sensor::Sensor *s) { bpm_sensor_ = s; }
     void set_beat_binary_sensor(binary_sensor::BinarySensor *s) { beat_sensor_ = s; }
 
+    /// Reset AGC and beat detector state for re-calibration.
+    void reset_agc();
+
  protected:
     microphone::Microphone *mic_{nullptr};
     uint32_t update_interval_ms_{50};

@@ -68,6 +68,13 @@ class BeatDetector {
         return true;
     }
 
+    void reset() {
+        samples_.clear();
+        beat_intervals_.clear();
+        last_beat_ms_ = 0;
+        threshold_ = 0.0f;
+    }
+
     /// Current dynamic threshold (for diagnostics).
     float current_threshold() const { return threshold_; }
 
