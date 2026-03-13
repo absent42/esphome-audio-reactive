@@ -82,10 +82,11 @@ binary_sensor:
       - light.turn_off: status_led
 
 light:
-  - platform: neopixelbus
+  - platform: esp32_rmt_led_strip
     id: status_led
-    type: GRB
-    variant: SK6812
+    rgb_order: GRB
+    chipset: SK6812
     pin: GPIO27
     num_leds: 1
+    rmt_channel: 0
     name: "Status LED"
