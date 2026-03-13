@@ -54,9 +54,11 @@ class AudioReactiveComponent : public Component {
     AGC *agc_amp_{nullptr};
     BeatDetector *beat_det_{nullptr};
 
-    // Audio buffer
+    // Audio buffer (written by I2S callback task, read by main loop)
     float *sample_buffer_{nullptr};
-    size_t samples_collected_{0};
+    volatile size_t samples_collected_{0};
+    volatile bool processing_{false};
+    bool mic_started_{false};
 
     // Timing
     uint32_t last_process_ms_{0};

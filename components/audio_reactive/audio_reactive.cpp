@@ -25,9 +25,10 @@ void AudioReactiveComponent::setup() {
     sample_buffer_ = new float[FFT_SIZE];
     samples_collected_ = 0;
 
-    // Register callback for incoming audio data
+    // Register callback for incoming audio data (called from I2S task)
     if (mic_ != nullptr) {
         mic_->add_data_callback([this](const std::vector<uint8_t> &data) {
+            if (processing_) return;  // Skip while main loop is reading the buffer
             const int16_t *samples = reinterpret_cast<const int16_t *>(data.data());
             size_t sample_count = data.size() / sizeof(int16_t);
             for (size_t i = 0; i < sample_count && samples_collected_ < FFT_SIZE; i++) {
@@ -35,22 +36,29 @@ void AudioReactiveComponent::setup() {
                     static_cast<float>(samples[i]) / 32768.0f;
             }
         });
-        mic_->start();
     }
 
-    ESP_LOGCONFIG(TAG, "  FFT size: %u", FFT_SIZE);
-    ESP_LOGCONFIG(TAG, "  Update interval: %u ms", update_interval_ms_);
-    ESP_LOGCONFIG(TAG, "  Beat sensitivity: %d", beat_sensitivity_);
+    ESP_LOGI(TAG, "Initialized (FFT=%u, interval=%ums, sensitivity=%d)",
+             FFT_SIZE, update_interval_ms_, beat_sensitivity_);
 }
 
 void AudioReactiveComponent::loop() {
+    // Start microphone on first loop iteration (after all components are set up)
+    if (!mic_started_ && mic_ != nullptr) {
+        mic_->start();
+        mic_started_ = true;
+        ESP_LOGI(TAG, "Microphone started");
+    }
+
     uint32_t now = millis();
 
     // Process when we have enough samples and interval has elapsed
     if (samples_collected_ >= FFT_SIZE &&
         (now - last_process_ms_) >= update_interval_ms_) {
+        processing_ = true;   // Pause callback writes
         process_audio_();
         samples_collected_ = 0;
+        processing_ = false;  // Resume callback writes
         last_process_ms_ = now;
     }
 
