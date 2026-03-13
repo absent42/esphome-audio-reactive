@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstddef>
 
+namespace esphome {
 namespace audio_reactive {
 
 /// Frequency band boundaries in Hz.
@@ -76,3 +77,4 @@ class BandAggregator {
 };
 
 }  // namespace audio_reactive
+}  // namespace esphome

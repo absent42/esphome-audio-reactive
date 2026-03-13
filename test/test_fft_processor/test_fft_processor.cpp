@@ -6,7 +6,7 @@
 #define AUDIO_REACTIVE_NATIVE_TEST
 #include "../components/audio_reactive/fft_processor.h"
 
-using namespace audio_reactive;
+using namespace esphome::audio_reactive;
 
 void test_bin_count() {
     FFTProcessor<512> proc(10000.0f);

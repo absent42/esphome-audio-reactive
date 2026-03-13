@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <vector>
 
+namespace esphome {
 namespace audio_reactive {
 
 /// Bass-energy threshold beat detector with BPM tracking.
@@ -110,3 +111,4 @@ class BeatDetector {
 };
 
 }  // namespace audio_reactive
+}  // namespace esphome

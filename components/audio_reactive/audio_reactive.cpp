@@ -12,12 +12,12 @@ void AudioReactiveComponent::setup() {
 
     // Allocate DSP pipeline
     float sample_rate = 10000.0f;  // I2S configured for ~10kHz
-    fft_ = new ::audio_reactive::FFTProcessor<FFT_SIZE>(sample_rate);
+    fft_ = new FFTProcessor<FFT_SIZE>(sample_rate);
     float freq_res = sample_rate / static_cast<float>(FFT_SIZE);
-    band_agg_ = new ::audio_reactive::BandAggregator(freq_res);
-    agc_bass_ = new ::audio_reactive::AGC(100);  // ~5s at 20 updates/s
-    agc_amp_ = new ::audio_reactive::AGC(100);
-    beat_det_ = new ::audio_reactive::BeatDetector(
+    band_agg_ = new BandAggregator(freq_res);
+    agc_bass_ = new AGC(100);  // ~5s at 20 updates/s
+    agc_amp_ = new AGC(100);
+    beat_det_ = new BeatDetector(
         beat_sensitivity_, 20, 150
     );
 

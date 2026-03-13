@@ -4,7 +4,7 @@
 
 #include "../components/audio_reactive/agc.h"
 
-using namespace audio_reactive;
+using namespace esphome::audio_reactive;
 
 void test_normalize_tracks_range() {
     AGC agc(10);

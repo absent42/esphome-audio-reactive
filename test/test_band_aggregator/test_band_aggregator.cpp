@@ -4,7 +4,7 @@
 
 #include "../components/audio_reactive/band_aggregator.h"
 
-using namespace audio_reactive;
+using namespace esphome::audio_reactive;
 
 void test_band_ranges() {
     BandAggregator agg(19.53f);

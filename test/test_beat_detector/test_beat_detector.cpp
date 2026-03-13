@@ -4,7 +4,7 @@
 
 #include "../components/audio_reactive/beat_detector.h"
 
-using namespace audio_reactive;
+using namespace esphome::audio_reactive;
 
 void test_no_beat_during_warmup() {
     BeatDetector det(50, 20);

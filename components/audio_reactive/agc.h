@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <vector>
 
+namespace esphome {
 namespace audio_reactive {
 
 /// Automatic gain control via rolling min/max normalization.
@@ -47,3 +48,4 @@ class AGC {
 };
 
 }  // namespace audio_reactive
+}  // namespace esphome

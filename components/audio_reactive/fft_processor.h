@@ -7,6 +7,7 @@
 #include <arduinoFFT.h>
 #endif
 
+namespace esphome {
 namespace audio_reactive {
 
 /// Wraps ArduinoFFT to produce frequency bin magnitudes from raw samples.
@@ -71,3 +72,4 @@ class FFTProcessor {
 };
 
 }  // namespace audio_reactive
+}  // namespace esphome
