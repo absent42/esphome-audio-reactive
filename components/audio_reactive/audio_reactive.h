@@ -48,11 +48,11 @@ class AudioReactiveComponent : public Component {
     // DSP pipeline — FFT size hardcoded to 512 (spec recommendation:
     // 512 samples at 10kHz gives ~20Hz resolution, sufficient for bass band)
     static constexpr size_t FFT_SIZE = 512;
-    ::audio_reactive::FFTProcessor<FFT_SIZE> *fft_{nullptr};
-    ::audio_reactive::BandAggregator *band_agg_{nullptr};
-    ::audio_reactive::AGC *agc_bass_{nullptr};
-    ::audio_reactive::AGC *agc_amp_{nullptr};
-    ::audio_reactive::BeatDetector *beat_det_{nullptr};
+    FFTProcessor<FFT_SIZE> *fft_{nullptr};
+    BandAggregator *band_agg_{nullptr};
+    AGC *agc_bass_{nullptr};
+    AGC *agc_amp_{nullptr};
+    BeatDetector *beat_det_{nullptr};
 
     // Audio buffer
     float *sample_buffer_{nullptr};
