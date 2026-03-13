@@ -54,6 +54,8 @@ class AudioReactiveComponent : public Component {
     FFTProcessor<FFT_SIZE> *fft_{nullptr};
     BandAggregator *band_agg_{nullptr};
     AGC *agc_bass_{nullptr};
+    AGC *agc_mid_{nullptr};
+    AGC *agc_high_{nullptr};
     AGC *agc_amp_{nullptr};
     BeatDetector *beat_det_{nullptr};
 

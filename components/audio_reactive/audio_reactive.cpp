@@ -16,6 +16,8 @@ void AudioReactiveComponent::setup() {
     float freq_res = sample_rate / static_cast<float>(FFT_SIZE);
     band_agg_ = new BandAggregator(freq_res);
     agc_bass_ = new AGC(100);  // ~5s at 20 updates/s
+    agc_mid_ = new AGC(100);
+    agc_high_ = new AGC(100);
     agc_amp_ = new AGC(100);
     beat_det_ = new BeatDetector(
         beat_sensitivity_, 20, 150
@@ -108,12 +110,14 @@ void AudioReactiveComponent::process_audio_() {
     // Band aggregation
     auto bands = band_agg_->aggregate(magnitudes, fft_->bin_count());
 
-    // AGC normalization
+    // AGC normalization — each band uses its own AGC instance
     agc_bass_->update(bands.bass);
+    agc_mid_->update(bands.mid);
+    agc_high_->update(bands.high);
     agc_amp_->update(bands.amplitude);
     float norm_bass = agc_bass_->normalize(bands.bass);
-    float norm_mid = agc_bass_->normalize(bands.mid);  // Use bass AGC range for consistency
-    float norm_high = agc_bass_->normalize(bands.high);
+    float norm_mid = agc_mid_->normalize(bands.mid);
+    float norm_high = agc_high_->normalize(bands.high);
     float norm_amp = agc_amp_->normalize(bands.amplitude);
 
     // Debug: log first 5 process cycles and then every 100th
@@ -151,10 +155,14 @@ void AudioReactiveComponent::process_audio_() {
 }
 
 void AudioReactiveComponent::reset_agc() {
-    ESP_LOGI(TAG, "AGC reset: bass range was [%.4f, %.4f], amp range was [%.4f, %.4f]",
+    ESP_LOGI(TAG, "AGC reset: bass [%.4f, %.4f], mid [%.4f, %.4f], high [%.4f, %.4f], amp [%.4f, %.4f]",
              agc_bass_->current_min(), agc_bass_->current_max(),
+             agc_mid_->current_min(), agc_mid_->current_max(),
+             agc_high_->current_min(), agc_high_->current_max(),
              agc_amp_->current_min(), agc_amp_->current_max());
     agc_bass_->reset();
+    agc_mid_->reset();
+    agc_high_->reset();
     agc_amp_->reset();
     beat_det_->reset();
     ESP_LOGI(TAG, "AGC and beat detector reset — re-calibrating");
