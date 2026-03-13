@@ -88,5 +88,4 @@ light:
     chipset: SK6812
     pin: GPIO27
     num_leds: 1
-    rmt_channel: 0
     name: "Status LED"
