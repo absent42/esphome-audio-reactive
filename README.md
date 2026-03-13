@@ -7,11 +7,11 @@ Designed as the audio source for
 [Aqara Advanced Lighting](https://github.com/absent42/aqara-advanced-lighting)
 audio-reactive dynamic scenes, but usable with any Home Assistant automation.
 
-Produces Home Assistant sensors for Beat Detected, BPM, Bass Frequency Energy , Mid Frequency Engergy, High Frequency Energy, Amplitude, and a beat detection sensitivity parameter.
+Produces Home Assistant sensors for Beat Detected, BPM, Bass Frequency Energy, Mid Frequency Energy, High Frequency Energy, Amplitude, and a beat detection sensitivity parameter.
 
 ## Hardware
 
-Can be adpated for any ESP32 with an I2S digital microphone. Builds currently available for:
+Can be adapted for any ESP32 with an I2S digital microphone. Configurations currently available for:
 
 | Device | Price | Notes |
 |--------|-------|-------|
@@ -69,12 +69,34 @@ Neither affects the USB web installer.
 | High Energy | sensor (0-1) | ~50ms | Normalized high band energy (2-5 kHz) |
 | Amplitude | sensor (0-1) | ~50ms | Overall normalized amplitude |
 | BPM | sensor | ~3s | Estimated beats per minute |
+| Beat Sensitivity | number (1-100) | On change | Controls beat detection threshold |
+| Recalibrate Button | binary_sensor | On press | Resets AGC and beat detector (ATOM Echo) |
+| Status LED | light | — | On-device RGB LED (ATOM Echo) |
 
 ## Configuration
 
     audio_reactive:
       microphone: mic_id          # Required: I2S microphone component ID
       update_interval: 50ms       # Processing interval (default: 50ms)
+      beat_sensitivity: 50        # 1-100, higher = reacts to quieter beats (default: 50)
+
+## Usage
+
+### Recalibrate Button (ATOM Echo)
+
+Press the top button on the ATOM Echo to reset the AGC (Automatic Gain Control)
+and beat detector. This clears the learned ambient levels for all frequency bands,
+allowing the device to re-adapt to a new environment or volume level. The LED
+flashes green to confirm.
+
+Use this when moving the device to a different room or when audio conditions
+change significantly (e.g. switching from background music to a loud party).
+
+### Beat Sensitivity
+
+Adjust the Beat Sensitivity number entity in Home Assistant (1-100) to control
+how easily beats are detected. Higher values react to quieter beats; lower values
+require stronger bass transients. Default is 50.
 
 ## How It Works
 
