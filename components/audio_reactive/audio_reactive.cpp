@@ -29,6 +29,9 @@ void AudioReactiveComponent::setup() {
     if (mic_ != nullptr) {
         mic_->add_data_callback([this](const std::vector<uint8_t> &data) {
             if (processing_) return;  // Skip while main loop is reading the buffer
+            if (callback_count_++ < 3) {
+                ESP_LOGI(TAG, "Callback #%u: %u bytes", callback_count_, data.size());
+            }
             const int16_t *samples = reinterpret_cast<const int16_t *>(data.data());
             size_t sample_count = data.size() / sizeof(int16_t);
             for (size_t i = 0; i < sample_count && samples_collected_ < FFT_SIZE; i++) {
@@ -36,6 +39,8 @@ void AudioReactiveComponent::setup() {
                     static_cast<float>(samples[i]) / 32768.0f;
             }
         });
+    } else {
+        ESP_LOGW(TAG, "No microphone assigned!");
     }
 
     ESP_LOGI(TAG, "Initialized (FFT=%u, interval=%ums, sensitivity=%d)",
@@ -62,6 +67,13 @@ void AudioReactiveComponent::loop() {
         last_process_ms_ = now;
     }
 
+    // Periodic debug: log sample collection progress every 5s
+    if ((now - last_debug_ms_) >= 5000) {
+        ESP_LOGI(TAG, "Debug: samples_collected=%u/%u, callbacks=%u, processed=%u",
+                 (unsigned)samples_collected_, FFT_SIZE, callback_count_, process_count_);
+        last_debug_ms_ = now;
+    }
+
     // Turn off beat binary sensor after pulse duration
     if (beat_on_ms_ > 0 && (now - beat_on_ms_) >= BEAT_PULSE_DURATION_MS) {
         if (beat_sensor_ != nullptr) {
@@ -73,6 +85,7 @@ void AudioReactiveComponent::loop() {
 
 void AudioReactiveComponent::process_audio_() {
     uint32_t now = millis();
+    process_count_++;
 
     // FFT
     fft_->process(sample_buffer_);
@@ -88,6 +101,14 @@ void AudioReactiveComponent::process_audio_() {
     float norm_mid = agc_bass_->normalize(bands.mid);  // Use bass AGC range for consistency
     float norm_high = agc_bass_->normalize(bands.high);
     float norm_amp = agc_amp_->normalize(bands.amplitude);
+
+    // Debug: log first 5 process cycles and then every 100th
+    if (process_count_ <= 5 || process_count_ % 100 == 0) {
+        ESP_LOGI(TAG, "Process #%u: raw bass=%.4f mid=%.4f high=%.4f amp=%.4f",
+                 process_count_, bands.bass, bands.mid, bands.high, bands.amplitude);
+        ESP_LOGI(TAG, "  normalized bass=%.3f mid=%.3f high=%.3f amp=%.3f",
+                 norm_bass, norm_mid, norm_high, norm_amp);
+    }
 
     // Beat detection
     bool is_beat = beat_det_->update(norm_bass, now);
