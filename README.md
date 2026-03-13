@@ -1,4 +1,4 @@
-# esphome-audio-reactive
+# ESPHome Audio Reactive
 
 ESP32 audio analysis component for ESPHome. Provides real-time beat detection,
 frequency band energy, amplitude, and BPM estimation via on-device FFT processing.
@@ -7,14 +7,15 @@ Designed as the audio source for
 [Aqara Advanced Lighting](https://github.com/absent42/aqara-advanced-lighting)
 audio-reactive dynamic scenes, but usable with any Home Assistant automation.
 
+Produces Home Assistant sensors for Beat Detected, BPM, Bass Frequency Energy , Mid Frequency Engergy, High Frequency Energy, Amplitude, and a beat detection sensitivity parameter.
+
 ## Hardware
 
-Any ESP32 with an I2S digital microphone:
+Can be adpated for any ESP32 with an I2S digital microphone. Builds currently available for:
 
 | Device | Price | Notes |
 |--------|-------|-------|
-| M5Stack ATOM Echo | ~$13 | Primary tested device, built-in PDM mic |
-| ESP32 + ICS-43434 | ~$8 | Best mic accuracy, 4-wire DIY |
+| M5Stack ATOM Echo | ~$13 | Built-in PDM mic |
 
 ## Installation
 
@@ -74,7 +75,6 @@ Neither affects the USB web installer.
     audio_reactive:
       microphone: mic_id          # Required: I2S microphone component ID
       update_interval: 50ms       # Processing interval (default: 50ms)
-      beat_sensitivity: 50        # 1-100, higher = reacts to quieter beats (default: 50)
 
 ## How It Works
 
