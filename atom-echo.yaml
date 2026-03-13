@@ -81,6 +81,12 @@ binary_sensor:
       - delay: 500ms
       - light.turn_off: status_led
 
+number:
+  - platform: audio_reactive
+    audio_reactive_id: audio_analysis
+    beat_sensitivity:
+      name: "Beat Sensitivity"
+
 light:
   - platform: esp32_rmt_led_strip
     id: status_led

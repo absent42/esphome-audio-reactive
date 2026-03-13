@@ -5,6 +5,7 @@ from esphome.const import CONF_ID
 
 CODEOWNERS = ["@absent42"]
 DEPENDENCIES = ["microphone"]
+AUTO_LOAD = ["number"]
 
 audio_reactive_ns = cg.esphome_ns.namespace("audio_reactive")
 AudioReactiveComponent = audio_reactive_ns.class_(

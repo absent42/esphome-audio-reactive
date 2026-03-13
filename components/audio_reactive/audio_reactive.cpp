@@ -133,11 +133,33 @@ void AudioReactiveComponent::reset_agc() {
     ESP_LOGI(TAG, "AGC and beat detector reset — re-calibrating");
 }
 
+void AudioReactiveBeatSensitivityNumber::setup() {
+    // Publish the initial value so HA sees the configured default
+    float initial = static_cast<float>(parent_->beat_sensitivity_);
+    this->publish_state(initial);
+}
+
+void AudioReactiveBeatSensitivityNumber::control(float value) {
+    parent_->update_beat_sensitivity(static_cast<int>(value));
+    this->publish_state(value);
+}
+
+void AudioReactiveComponent::update_beat_sensitivity(int value) {
+    beat_sensitivity_ = value;
+    if (beat_det_ != nullptr) {
+        beat_det_->set_sensitivity(value);
+    }
+    ESP_LOGI(TAG, "Beat sensitivity changed to %d", value);
+}
+
 void AudioReactiveComponent::dump_config() {
     ESP_LOGCONFIG(TAG, "AudioReactive:");
     ESP_LOGCONFIG(TAG, "  FFT size: %u (fixed)", FFT_SIZE);
     ESP_LOGCONFIG(TAG, "  Update interval: %u ms", update_interval_ms_);
     ESP_LOGCONFIG(TAG, "  Beat sensitivity: %d", beat_sensitivity_);
+    if (beat_sensitivity_number_ != nullptr) {
+        ESP_LOGCONFIG(TAG, "  Sensitivity number entity: attached");
+    }
 }
 
 }  // namespace audio_reactive

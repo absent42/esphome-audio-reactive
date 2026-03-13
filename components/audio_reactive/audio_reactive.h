@@ -10,10 +10,25 @@
 #include "esphome/core/component.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
+#include "esphome/components/number/number.h"
 #include "esphome/components/microphone/microphone.h"
 
 namespace esphome {
 namespace audio_reactive {
+
+// Forward declare
+class AudioReactiveComponent;
+
+/// Number entity for runtime beat sensitivity adjustment.
+class AudioReactiveBeatSensitivityNumber : public number::Number, public Component {
+ public:
+    void set_parent(AudioReactiveComponent *parent) { parent_ = parent; }
+    void setup() override;
+
+ protected:
+    void control(float value) override;
+    AudioReactiveComponent *parent_{nullptr};
+};
 
 class AudioReactiveComponent : public Component {
  public:
@@ -33,9 +48,13 @@ class AudioReactiveComponent : public Component {
     void set_amplitude_sensor(sensor::Sensor *s) { amplitude_sensor_ = s; }
     void set_bpm_sensor(sensor::Sensor *s) { bpm_sensor_ = s; }
     void set_beat_binary_sensor(binary_sensor::BinarySensor *s) { beat_sensor_ = s; }
+    void set_beat_sensitivity_number(AudioReactiveBeatSensitivityNumber *n) { beat_sensitivity_number_ = n; }
+    void update_beat_sensitivity(int value);
 
     /// Reset AGC and beat detector state for re-calibration.
     void reset_agc();
+
+    friend class AudioReactiveBeatSensitivityNumber;
 
  protected:
     microphone::Microphone *mic_{nullptr};
@@ -49,6 +68,7 @@ class AudioReactiveComponent : public Component {
     sensor::Sensor *amplitude_sensor_{nullptr};
     sensor::Sensor *bpm_sensor_{nullptr};
     binary_sensor::BinarySensor *beat_sensor_{nullptr};
+    AudioReactiveBeatSensitivityNumber *beat_sensitivity_number_{nullptr};
 
     // DSP pipeline — FFT size hardcoded to 512
     // 512 samples at 16kHz gives ~31Hz resolution, sufficient for bass band
