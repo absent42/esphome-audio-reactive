@@ -22,11 +22,11 @@ class SilenceDetector {
     /// @param timestamp_ms   Monotonic timestamp in milliseconds
     Result update(float raw_amplitude, uint32_t timestamp_ms) {
         // Map squelch 0-100 to threshold.
-        // Raw FFT magnitudes from a PDM mic typically produce RMS values in the
-        // range 0-50+ for loud signals, with noise floor around 0.5-5.0 depending
-        // on hardware. Scale squelch linearly: squelch=10 → threshold=1.0,
-        // squelch=50 → threshold=5.0, squelch=100 → threshold=10.0.
-        float threshold = squelch_ / 10.0f;
+        // PDM mic FFT amplitude in a quiet room measures ~1-13 RMS.
+        // At default squelch=10, threshold=20 gates quiet room noise.
+        // Music typically produces amplitude 30-200+.
+        // Scale: squelch=10 → 20, squelch=50 → 100, squelch=100 → 200.
+        float threshold = squelch_ * 2.0f;
 
         bool below = raw_amplitude < threshold;
 

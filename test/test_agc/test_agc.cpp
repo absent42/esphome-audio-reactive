@@ -29,11 +29,11 @@ void test_agc_amplifies_quiet() {
 
 void test_agc_noise_floor_suppresses() {
     AGC agc(AGC_NORMAL);
-    // Default noise floor is 0.5 — values below should return 0
-    float result = agc.process(0.1f);
+    // Default noise floor is 15.0 — values below should return 0
+    float result = agc.process(5.0f);
     assert(result == 0.0f);
     // Values above noise floor should be processed normally
-    result = agc.process(1.0f);
+    result = agc.process(20.0f);
     assert(result > 0.0f);
     printf("PASS: test_agc_noise_floor_suppresses\n");
 }
@@ -61,8 +61,8 @@ void test_agc_output_range() {
 
 void test_agc_reset() {
     AGC agc(AGC_NORMAL);
-    // Drive gain away from 1.0 with values above noise floor
-    for (int i = 0; i < 100; i++) agc.process(5.0f);
+    // Drive gain away from 1.0 with values above noise floor (15.0)
+    for (int i = 0; i < 100; i++) agc.process(20.0f);
     assert(agc.current_gain() != 1.0f);
     agc.reset();
     assert(agc.current_gain() == 1.0f);
@@ -71,7 +71,7 @@ void test_agc_reset() {
 
 void test_agc_suspend_decays_integrator() {
     AGC agc(AGC_NORMAL);
-    for (int i = 0; i < 100; i++) agc.process(2.0f);  // Above noise floor
+    for (int i = 0; i < 100; i++) agc.process(20.0f);  // Above noise floor (15.0)
     float gain_after_signal = agc.current_gain();
 
     for (int i = 0; i < 50; i++) agc.suspend();
@@ -86,7 +86,7 @@ void test_agc_tracks_toward_target() {
     AGC agc(AGC_NORMAL);
     float last = 0.0f;
     for (int i = 0; i < 500; i++) {
-        last = agc.process(1.0f);  // Above noise floor (0.5)
+        last = agc.process(20.0f);  // Above noise floor (15.0)
     }
     // After 500 steps the AGC should have adjusted output toward target
     assert(last > 0.0f && last <= 1.0f);
@@ -99,8 +99,8 @@ void test_agc_different_presets() {
     AGC lazy(AGC_LAZY);
 
     for (int i = 0; i < 200; i++) {
-        vivid.process(1.0f);  // Above noise floor
-        lazy.process(1.0f);
+        vivid.process(20.0f);  // Above noise floor (15.0)
+        lazy.process(20.0f);
     }
     // Both should have adjusted gain from 1.0
     assert(vivid.current_gain() != 1.0f);

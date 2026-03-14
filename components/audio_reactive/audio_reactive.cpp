@@ -144,8 +144,8 @@ void AudioReactiveComponent::loop() {
         ESP_LOGI(TAG, "AGC gains: bass=%.2f mid=%.2f high=%.2f amp=%.2f",
                  agc_bass_.current_gain(), agc_mid_.current_gain(),
                  agc_high_.current_gain(), agc_amp_.current_gain());
-        ESP_LOGI(TAG, "AGC noise_floor=%.2f | Squelch=%.1f (threshold=%.2f)",
-                 0.5f, silence_det_.squelch(), silence_det_.squelch() / 10.0f);
+        ESP_LOGI(TAG, "AGC noise_floor=15.00 | Squelch=%.1f (threshold=%.2f)",
+                 silence_det_.squelch(), silence_det_.squelch() * 2.0f);
         ESP_LOGI(TAG, "Silence state: prev_silence=%d", prev_silence_);
         ESP_LOGI(TAG, "Published: bass=%.3f mid=%.3f high=%.3f amp=%.3f",
                  smooth_bass_, smooth_mid_, smooth_high_, smooth_amp_);
