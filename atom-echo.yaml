@@ -69,21 +69,14 @@ binary_sensor:
     name: "Device Button"
     id: device_button
     on_multi_click:
-      # Short press (< 1s): AGC reset with green flash
+      # Double click: calibrate quiet room
       - timing:
-          - ON for at most 1s
+          - ON for at most 0.5s
+          - OFF for at most 0.5s
+          - ON for at most 0.5s
           - OFF for at least 0.3s
         then:
-          - button.press: reset_agc_btn
-          - light.turn_on:
-              id: status_led
-              effect: none
-              red: 0
-              green: 1
-              blue: 0
-              brightness: 100%
-          - delay: 800ms
-          - light.turn_off: status_led
+          - button.press: calibrate_quiet_btn
       # Long press (>= 1s): toggle mute
       - timing:
           - ON for at least 1s
@@ -126,6 +119,38 @@ button:
     reset_agc:
       name: "Reset AGC"
       id: reset_agc_btn
+    calibrate_quiet:
+      name: "Calibrate Quiet Room"
+      id: calibrate_quiet_btn
+      on_press:
+        - light.turn_on:
+            id: status_led
+            red: 0
+            green: 1
+            blue: 0
+            brightness: 50%
+        - delay: 3.5s
+        - light.turn_on:
+            id: status_led
+            brightness: 100%
+        - delay: 1s
+        - light.turn_off: status_led
+    calibrate_music:
+      name: "Calibrate Music Level"
+      id: calibrate_music_btn
+      on_press:
+        - light.turn_on:
+            id: status_led
+            red: 0
+            green: 0
+            blue: 1
+            brightness: 50%
+        - delay: 5.5s
+        - light.turn_on:
+            id: status_led
+            brightness: 100%
+        - delay: 1s
+        - light.turn_off: status_led
 
 light:
   - platform: esp32_rmt_led_strip

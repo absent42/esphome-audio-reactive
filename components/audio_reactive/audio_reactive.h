@@ -11,6 +11,7 @@
 #include "dynamics_limiter.h"
 
 #include "esphome/core/component.h"
+#include "esphome/core/preferences.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/number/number.h"
@@ -29,8 +30,25 @@ namespace audio_reactive {
 class AudioReactiveComponent;
 class AudioReactiveMicrophoneMuteSwitch;
 class AudioReactiveResetAGCButton;
+class AudioReactiveCalibrateQuietButton;
+class AudioReactiveCalibrateMusictButton;
 class AudioReactiveSquelchNumber;
 class AudioReactiveDetectionModeSelect;
+
+/// Calibration state machine phases.
+enum CalibrationState { CAL_IDLE, CAL_QUIET, CAL_MUSIC };
+
+/// Persistent calibration data stored in NVS flash.
+struct CalibrationStore {
+    float squelch_threshold;    // From quiet cal: max_mid_high * 1.5
+    float noise_floor_bass;     // Pre-scaled quiet max bass
+    float noise_floor_mid;      // Pre-scaled quiet max mid
+    float noise_floor_high;     // Pre-scaled quiet max high
+    float noise_floor_amp;      // Pre-scaled quiet max amp
+    float raw_scale;            // From music cal: 0.5 / avg_amplitude
+    bool quiet_calibrated;
+    bool music_calibrated;
+};
 
 /// Number entity for runtime beat sensitivity adjustment.
 class AudioReactiveBeatSensitivityNumber : public number::Number, public Component {
@@ -56,6 +74,26 @@ class AudioReactiveMicrophoneMuteSwitch : public switch_::Switch, public Compone
 
 /// Button entity for resetting AGC calibration.
 class AudioReactiveResetAGCButton : public button::Button, public Component {
+ public:
+    void set_parent(AudioReactiveComponent *parent) { parent_ = parent; }
+
+ protected:
+    void press_action() override;
+    AudioReactiveComponent *parent_{nullptr};
+};
+
+/// Button entity for quiet room calibration.
+class AudioReactiveCalibrateQuietButton : public button::Button, public Component {
+ public:
+    void set_parent(AudioReactiveComponent *parent) { parent_ = parent; }
+
+ protected:
+    void press_action() override;
+    AudioReactiveComponent *parent_{nullptr};
+};
+
+/// Button entity for music level calibration.
+class AudioReactiveCalibrateMusictButton : public button::Button, public Component {
  public:
     void set_parent(AudioReactiveComponent *parent) { parent_ = parent; }
 
@@ -114,6 +152,8 @@ class AudioReactiveComponent : public Component {
     void set_squelch_number(AudioReactiveSquelchNumber *n) { squelch_number_ = n; }
     void set_mute_switch(AudioReactiveMicrophoneMuteSwitch *s) { mute_switch_ = s; }
     void set_reset_agc_button(AudioReactiveResetAGCButton *b) { reset_button_ = b; }
+    void set_calibrate_quiet_button(AudioReactiveCalibrateQuietButton *b) { calibrate_quiet_button_ = b; }
+    void set_calibrate_music_button(AudioReactiveCalibrateMusictButton *b) { calibrate_music_button_ = b; }
     void set_detection_mode_select(AudioReactiveDetectionModeSelect *s) { detection_mode_select_ = s; }
 
     void update_beat_sensitivity(int value);
@@ -125,9 +165,16 @@ class AudioReactiveComponent : public Component {
     /// Reset AGC and onset detector state for re-calibration.
     void reset_agc();
 
+    /// Start quiet room calibration (3 seconds, measures ambient noise).
+    void start_quiet_calibration();
+    /// Start music calibration (5 seconds, measures typical playback level).
+    void start_music_calibration();
+
     friend class AudioReactiveBeatSensitivityNumber;
     friend class AudioReactiveMicrophoneMuteSwitch;
     friend class AudioReactiveResetAGCButton;
+    friend class AudioReactiveCalibrateQuietButton;
+    friend class AudioReactiveCalibrateMusictButton;
     friend class AudioReactiveSquelchNumber;
     friend class AudioReactiveDetectionModeSelect;
 
@@ -152,7 +199,27 @@ class AudioReactiveComponent : public Component {
     AudioReactiveSquelchNumber *squelch_number_{nullptr};
     AudioReactiveMicrophoneMuteSwitch *mute_switch_{nullptr};
     AudioReactiveResetAGCButton *reset_button_{nullptr};
+    AudioReactiveCalibrateQuietButton *calibrate_quiet_button_{nullptr};
+    AudioReactiveCalibrateMusictButton *calibrate_music_button_{nullptr};
     AudioReactiveDetectionModeSelect *detection_mode_select_{nullptr};
+
+    // Calibration persistence and state
+    ESPPreferenceObject cal_pref_;
+    CalibrationStore cal_store_{5.0f, 0.25f, 0.08f, 0.03f, 0.10f, 1.0f / 20.0f, false, false};
+    CalibrationState cal_state_{CAL_IDLE};
+    uint32_t cal_start_ms_{0};
+    float cal_max_mid_high_{0};
+    float cal_max_bass_{0};
+    float cal_max_mid_{0};
+    float cal_max_high_{0};
+    float cal_max_amp_{0};
+    float cal_sum_amp_{0};
+    uint32_t cal_sample_count_{0};
+    float raw_scale_{1.0f / 20.0f};
+
+    void finish_quiet_calibration();
+    void finish_music_calibration();
+    void apply_calibration();
 
     // DSP pipeline
     static constexpr size_t FFT_SIZE = 512;
