@@ -18,11 +18,15 @@ class SilenceDetector {
     };
 
     /// Process a new amplitude sample.
-    /// @param raw_amplitude  Normalized amplitude (0.0-1.0)
+    /// @param raw_amplitude  Raw RMS amplitude from FFT (not normalized — scale varies by mic/gain)
     /// @param timestamp_ms   Monotonic timestamp in milliseconds
     Result update(float raw_amplitude, uint32_t timestamp_ms) {
-        // Map squelch 0-100 to threshold 0.0-0.1
-        float threshold = squelch_ / 1000.0f;
+        // Map squelch 0-100 to threshold.
+        // Raw FFT magnitudes from a PDM mic typically produce RMS values in the
+        // range 0-50+ for loud signals, with noise floor around 0.5-5.0 depending
+        // on hardware. Scale squelch linearly: squelch=10 → threshold=1.0,
+        // squelch=50 → threshold=5.0, squelch=100 → threshold=10.0.
+        float threshold = squelch_ / 10.0f;
 
         bool below = raw_amplitude < threshold;
 

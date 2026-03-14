@@ -59,7 +59,7 @@ binary_sensor:
   - platform: audio_reactive
     audio_reactive_id: audio_analysis
     onset_detected:
-      name: "Onset Detected"
+      name: "Audio Sensor"
     silence:
       name: "Silence"
   - platform: gpio
@@ -68,21 +68,23 @@ binary_sensor:
       inverted: true
     name: "Device Button"
     id: device_button
-    on_click:
-      min_length: 0ms
-      max_length: 500ms
-      then:
-        - button.press: reset_agc_btn
-        - light.turn_on:
-            id: status_led
-            effect: none
-            red: 0
-            green: 1
-            blue: 0
-            brightness: 100%
-        - delay: 500ms
-        - light.turn_off: status_led
     on_multi_click:
+      # Short press (< 1s): AGC reset with green flash
+      - timing:
+          - ON for at most 1s
+          - OFF for at least 0.3s
+        then:
+          - button.press: reset_agc_btn
+          - light.turn_on:
+              id: status_led
+              effect: none
+              red: 0
+              green: 1
+              blue: 0
+              brightness: 100%
+          - delay: 800ms
+          - light.turn_off: status_led
+      # Long press (>= 1s): toggle mute
       - timing:
           - ON for at least 1s
         then:

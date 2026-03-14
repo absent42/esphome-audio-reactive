@@ -28,8 +28,19 @@ class AGC {
     /**
      * Process a raw value through the AGC.
      * Returns gain-adjusted value normalized roughly to 0-1 range.
+     * Values below the noise floor are suppressed to zero to prevent
+     * the AGC from amplifying mic self-noise in quiet environments.
      */
     float process(float raw_value) {
+        // Suppress values below noise floor — prevents AGC from amplifying
+        // mic self-noise to fill the 0-1 range in quiet rooms.
+        // Noise floor is set low enough to not affect real audio signals.
+        if (raw_value < noise_floor_) {
+            // Don't update tracking — just decay toward zero
+            sample_max_ *= preset_.decay;
+            return 0.0f;
+        }
+
         // Track signal level
         if (raw_value > sample_max_) {
             sample_max_ = sample_max_ + preset_.attack_rate * (raw_value - sample_max_);
@@ -55,6 +66,12 @@ class AGC {
     }
 
     /**
+     * Set the noise floor threshold. Raw values below this are suppressed to zero.
+     * Default 0.5 — typical PDM mic self-noise RMS from FFT.
+     */
+    void set_noise_floor(float floor) { noise_floor_ = floor; }
+
+    /**
      * Suspend gain adjustments (call during silence).
      * Slowly decays the integrator.
      */
@@ -77,6 +94,7 @@ class AGC {
     float integrator_;
     float sample_avg_;
     float sample_max_;
+    float noise_floor_{0.5f};  // Raw RMS values below this are suppressed
 };
 
 }  // namespace audio_reactive
