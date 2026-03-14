@@ -29,11 +29,12 @@ void test_agc_amplifies_quiet() {
 
 void test_agc_noise_floor_suppresses() {
     AGC agc(AGC_NORMAL);
-    // Default noise floor is 15.0 — values below should return 0
-    float result = agc.process(5.0f);
+    agc.set_noise_floor(5.0f);  // Set explicit floor for test
+    // Values below floor should return 0
+    float result = agc.process(2.0f);
     assert(result == 0.0f);
-    // Values above noise floor should be processed normally
-    result = agc.process(20.0f);
+    // Values above floor should be processed normally
+    result = agc.process(10.0f);
     assert(result > 0.0f);
     printf("PASS: test_agc_noise_floor_suppresses\n");
 }

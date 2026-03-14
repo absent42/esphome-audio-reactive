@@ -94,7 +94,7 @@ class AGC {
     float integrator_;
     float sample_avg_;
     float sample_max_;
-    float noise_floor_{15.0f};  // Raw RMS values below this are suppressed (quiet room ~1-13)
+    float noise_floor_{0.0f};  // Raw RMS values below this are suppressed. Set per-band by main component.
 };
 
 }  // namespace audio_reactive

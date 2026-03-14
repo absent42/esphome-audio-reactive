@@ -14,6 +14,13 @@ void AudioReactiveComponent::setup() {
     fft_ = new FFTProcessor<FFT_SIZE>(SAMPLE_RATE);
     // BandAggregator uses default constructor (hardcoded 22050 Hz band definitions)
     // AGC instances are stack-allocated with AGC_NORMAL preset
+    // Set per-band noise floors calibrated to PDM mic quiet room levels:
+    // Quiet room: bass=3-45 (AC hum), mid=0.7-3, high=0.2-0.7, amp=1-13
+    // These floors prevent AGC from amplifying mic self-noise to 1.0
+    agc_bass_.set_noise_floor(5.0f);   // Bass has high noise from AC hum
+    agc_mid_.set_noise_floor(1.5f);    // Mid is cleaner
+    agc_high_.set_noise_floor(0.5f);   // High is cleanest
+    agc_amp_.set_noise_floor(2.0f);    // Overall amplitude
     onset_det_ = new OnsetDetector(beat_sensitivity_);
     silence_det_ = SilenceDetector(squelch_);
     limiter_ = DynamicsLimiter();
@@ -144,8 +151,9 @@ void AudioReactiveComponent::loop() {
         ESP_LOGI(TAG, "AGC gains: bass=%.2f mid=%.2f high=%.2f amp=%.2f",
                  agc_bass_.current_gain(), agc_mid_.current_gain(),
                  agc_high_.current_gain(), agc_amp_.current_gain());
-        ESP_LOGI(TAG, "AGC noise_floor=15.00 | Squelch=%.1f (threshold=%.2f)",
-                 silence_det_.squelch(), silence_det_.squelch() * 2.0f);
+        float dbg_silence_signal = energies.mid + energies.high;
+        ESP_LOGI(TAG, "Silence signal (mid+high)=%.2f | Squelch=%.1f (threshold=%.2f)",
+                 dbg_silence_signal, silence_det_.squelch(), silence_det_.squelch() * 0.5f);
         ESP_LOGI(TAG, "Silence state: prev_silence=%d", prev_silence_);
         ESP_LOGI(TAG, "Published: bass=%.3f mid=%.3f high=%.3f amp=%.3f",
                  smooth_bass_, smooth_mid_, smooth_high_, smooth_amp_);
@@ -158,8 +166,11 @@ void AudioReactiveComponent::loop() {
         last_debug_ms = now;
     }
 
-    // Silence detection on raw amplitude
-    auto silence_result = silence_det_.update(energies.amplitude, now);
+    // Silence detection on mid+high energy (not amplitude, which is diluted
+    // by empty high-frequency bins, and not bass, which picks up AC hum/rumble).
+    // Quiet room mid+high ≈ 1-4, music ≈ 10-25.
+    float silence_signal = energies.mid + energies.high;
+    auto silence_result = silence_det_.update(silence_signal, now);
 
     if (silence_result.is_below_gate) {
         // Below squelch gate — suspend AGC, publish zeros
