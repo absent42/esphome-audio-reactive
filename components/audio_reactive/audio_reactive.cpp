@@ -120,6 +120,44 @@ void AudioReactiveComponent::loop() {
 
     last_process_ms_ = now;
 
+    // Debug: comprehensive logging every 2 seconds
+    static uint32_t last_debug_ms = 0;
+    static float raw_amp_min = 1e10f, raw_amp_max = 0.0f;
+    static float raw_bass_min = 1e10f, raw_bass_max = 0.0f;
+    // Track min/max of raw values between log intervals
+    if (energies.amplitude < raw_amp_min) raw_amp_min = energies.amplitude;
+    if (energies.amplitude > raw_amp_max) raw_amp_max = energies.amplitude;
+    if (energies.bass < raw_bass_min) raw_bass_min = energies.bass;
+    if (energies.bass > raw_bass_max) raw_bass_max = energies.bass;
+
+    if ((now - last_debug_ms) >= 2000) {
+        ESP_LOGI(TAG, "=== AUDIO DEBUG ===");
+        ESP_LOGI(TAG, "RAW (current): amp=%.4f bass=%.4f mid=%.4f high=%.4f",
+                 energies.amplitude, energies.bass, energies.mid, energies.high);
+        ESP_LOGI(TAG, "RAW (2s range): amp=[%.4f..%.4f] bass=[%.4f..%.4f]",
+                 raw_amp_min, raw_amp_max, raw_bass_min, raw_bass_max);
+        ESP_LOGI(TAG, "RAW bands: [%.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f]",
+                 energies.bands[0], energies.bands[1], energies.bands[2], energies.bands[3],
+                 energies.bands[4], energies.bands[5], energies.bands[6], energies.bands[7],
+                 energies.bands[8], energies.bands[9], energies.bands[10], energies.bands[11],
+                 energies.bands[12], energies.bands[13], energies.bands[14], energies.bands[15]);
+        ESP_LOGI(TAG, "AGC gains: bass=%.2f mid=%.2f high=%.2f amp=%.2f",
+                 agc_bass_.current_gain(), agc_mid_.current_gain(),
+                 agc_high_.current_gain(), agc_amp_.current_gain());
+        ESP_LOGI(TAG, "AGC noise_floor=%.2f | Squelch=%.1f (threshold=%.2f)",
+                 0.5f, silence_det_.squelch(), silence_det_.squelch() / 10.0f);
+        ESP_LOGI(TAG, "Silence state: prev_silence=%d", prev_silence_);
+        ESP_LOGI(TAG, "Published: bass=%.3f mid=%.3f high=%.3f amp=%.3f",
+                 smooth_bass_, smooth_mid_, smooth_high_, smooth_amp_);
+        ESP_LOGI(TAG, "Ring buffer: %u/%u samples",
+                 static_cast<unsigned>(ring_buffer_.available()),
+                 static_cast<unsigned>(ring_buffer_.capacity()));
+        // Reset min/max trackers
+        raw_amp_min = 1e10f; raw_amp_max = 0.0f;
+        raw_bass_min = 1e10f; raw_bass_max = 0.0f;
+        last_debug_ms = now;
+    }
+
     // Silence detection on raw amplitude
     auto silence_result = silence_det_.update(energies.amplitude, now);
 
