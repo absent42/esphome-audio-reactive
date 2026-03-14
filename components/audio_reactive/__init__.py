@@ -5,7 +5,7 @@ from esphome.const import CONF_ID
 
 CODEOWNERS = ["@absent42"]
 DEPENDENCIES = ["microphone"]
-AUTO_LOAD = ["number"]
+AUTO_LOAD = ["number", "select", "switch", "button"]
 
 audio_reactive_ns = cg.esphome_ns.namespace("audio_reactive")
 AudioReactiveComponent = audio_reactive_ns.class_(
@@ -15,6 +15,7 @@ AudioReactiveComponent = audio_reactive_ns.class_(
 CONF_MICROPHONE = "microphone"
 CONF_UPDATE_INTERVAL = "update_interval"
 CONF_BEAT_SENSITIVITY = "beat_sensitivity"
+CONF_SQUELCH = "squelch"
 
 from esphome.components import microphone
 
@@ -24,6 +25,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Required(CONF_MICROPHONE): cv.use_id(microphone.Microphone),
         cv.Optional(CONF_UPDATE_INTERVAL, default="50ms"): cv.positive_time_period_milliseconds,
         cv.Optional(CONF_BEAT_SENSITIVITY, default=50): cv.int_range(min=1, max=100),
+        cv.Optional(CONF_SQUELCH, default=10): cv.int_range(min=0, max=100),
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -36,3 +38,4 @@ async def to_code(config):
     cg.add(var.set_microphone(mic))
     cg.add(var.set_update_interval(config[CONF_UPDATE_INTERVAL]))
     cg.add(var.set_beat_sensitivity(config[CONF_BEAT_SENSITIVITY]))
+    cg.add(var.set_squelch(config[CONF_SQUELCH]))

@@ -64,7 +64,16 @@ class FFTProcessor {
     /// Pointer to magnitude array (bin_count() elements).
     const float* magnitudes() const { return magnitudes_; }
 
+    /// Pink noise correction coefficients (WLED empirical values, 16 entries).
+    const float* pink_noise_coefficients() const { return PINK_NOISE_CORRECTION; }
+
  private:
+    static constexpr float PINK_NOISE_CORRECTION[16] = {
+        1.70f, 1.71f, 1.73f, 1.78f, 1.68f, 1.56f, 1.55f, 1.63f,
+        1.79f, 1.62f, 1.80f, 2.06f, 2.47f, 3.35f, 6.83f, 9.55f
+    };
+
+
     float sample_rate_;
     float real_[N]{};
     float imag_[N]{};
