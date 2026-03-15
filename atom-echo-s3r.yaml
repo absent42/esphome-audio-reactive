@@ -7,6 +7,10 @@ esp32:
   framework:
     type: esp-idf
 
+psram:
+  mode: octal
+  speed: 80MHz
+
 wifi:
 
 improv_serial:
