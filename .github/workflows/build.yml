@@ -13,6 +13,10 @@ jobs:
         device:
           - name: atom-echo
             yaml: atom-echo.yaml
+          - name: atom-echo-s3r
+            yaml: atom-echo-s3r.yaml
+          - name: waveshare-s3-audio
+            yaml: waveshare-s3-audio.yaml
     steps:
       - uses: actions/checkout@v6
 
