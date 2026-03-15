@@ -1,13 +1,15 @@
 esphome:
-  name: audio-reactive
-  friendly_name: Audio Reactive Sensor
+  name: audio-reactive-s3r
+  friendly_name: Audio Reactive Sensor (S3R)
 
 esp32:
-  board: m5stack-atom
+  board: esp32-s3-devkitc-1
   framework:
     type: esp-idf
 
 wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
 
 improv_serial:
 
@@ -20,19 +22,28 @@ external_components:
   - source: components
     components: [audio_reactive]
 
+i2c:
+  sda: GPIO0
+  scl: GPIO45
+
+audio_dac:
+  - platform: es8311
+    address: 0x18
+    id: es8311_dac
+
 i2s_audio:
-  i2s_lrclk_pin: GPIO33
-  i2s_bclk_pin: GPIO19
+  i2s_lrclk_pin: GPIO3
+  i2s_bclk_pin: GPIO17
+  i2s_mclk_pin: GPIO11
 
 microphone:
   - platform: i2s_audio
     id: mic
     adc_type: external
-    i2s_din_pin: GPIO23
-    pdm: true
-    sample_rate: 22050
+    i2s_din_pin: GPIO4
+    pdm: false
+    sample_rate: 44100
     bits_per_sample: 16bit
-    channel: right
 
 audio_reactive:
   id: audio_analysis
@@ -40,38 +51,32 @@ audio_reactive:
   update_interval: 50ms
   beat_sensitivity: 50
   squelch: 10
-  sample_rate: 22050
+  sample_rate: 44100
+  fft_size: 1024
   on_mute_changed:
     - if:
         condition:
           switch.is_on: mic_mute
         then:
-          - light.turn_on:
-              id: status_led
-              red: 1
-              green: 0
-              blue: 0
-              brightness: 100%
+          - output.turn_on: speaker_amp_enable
+          - rtttl.play: "muted:d=16,o=5,b=200:c5,p,c4"
+          - delay: 500ms
+          - output.turn_off: speaker_amp_enable
         else:
-          - light.turn_off: status_led
+          - output.turn_on: speaker_amp_enable
+          - rtttl.play: "unmuted:d=16,o=5,b=200:c4,p,c5"
+          - delay: 500ms
+          - output.turn_off: speaker_amp_enable
   on_calibration_started:
-    - light.turn_on:
-        id: status_led
-        red: 0
-        green: 1
-        blue: 0
-        brightness: 50%
-        effect: pulse
+    - output.turn_on: speaker_amp_enable
+    - rtttl.play: "cal_start:d=16,o=5,b=200:c5,e5,g5"
+    - delay: 500ms
+    - output.turn_off: speaker_amp_enable
   on_calibration_complete:
-    - light.turn_on:
-        id: status_led
-        red: 0
-        green: 1
-        blue: 0
-        brightness: 100%
-        effect: none
-    - delay: 1s
-    - light.turn_off: status_led
+    - output.turn_on: speaker_amp_enable
+    - rtttl.play: "cal_done:d=8,o=5,b=200:g5,c6"
+    - delay: 500ms
+    - output.turn_off: speaker_amp_enable
 
 sensor:
   - platform: audio_reactive
@@ -96,7 +101,7 @@ binary_sensor:
       name: "Silence"
   - platform: gpio
     pin:
-      number: GPIO39
+      number: GPIO41
       inverted: true
     name: "Device Button"
     id: device_button
@@ -159,16 +164,18 @@ button:
       name: "Calibrate Music Level"
       id: calibrate_music_btn
 
-light:
-  - platform: esp32_rmt_led_strip
-    id: status_led
-    rgb_order: GRB
-    chipset: SK6812
-    pin: GPIO27
-    num_leds: 1
-    name: "Status LED"
-    effects:
-      - pulse:
-          name: pulse
-          transition_length: 500ms
-          update_interval: 500ms
+output:
+  - platform: gpio
+    pin: GPIO18
+    id: speaker_amp_enable
+
+speaker:
+  - platform: i2s_audio
+    id: speaker
+    dac_type: external
+    i2s_dout_pin: GPIO48
+    sample_rate: 44100
+
+rtttl:
+  id: buzzer
+  speaker: speaker

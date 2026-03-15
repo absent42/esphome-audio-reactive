@@ -23,6 +23,8 @@
             padding: 1.5rem;
             margin: 1rem 0;
         }
+        .device-card::after { content: ""; display: table; clear: both; }
+        .device-card img { max-width: 120px; float: right; margin-left: 1rem; border-radius: 4px; }
         .device-card h2 { margin-top: 0; font-size: 1.1rem; }
         esp-web-install-button {
             display: block;
@@ -52,9 +54,28 @@
 
     <div class="device-card">
         <h2>M5Stack ATOM Echo</h2>
-        <p>Built-in PDM microphone, USB-C. Primary recommended device.</p>
+        <img src="images/atom-echo.jpg" alt="ATOM Echo" />
+        <p>Built-in PDM microphone, status LED, USB-C. ~$13.</p>
         <esp-web-install-button manifest="manifest-atom-echo.json">
             <button slot="activate">Install on ATOM Echo</button>
+        </esp-web-install-button>
+    </div>
+
+    <div class="device-card">
+        <h2>M5Stack ATOM Echo S3R</h2>
+        <img src="images/atom-echo-s3r.jpg" alt="ATOM Echo S3R" />
+        <p>ES8311 codec, speaker feedback, ESP32-S3, USB-C. ~$15.</p>
+        <esp-web-install-button manifest="manifest-atom-echo-s3r.json">
+            <button slot="activate">Install on ATOM Echo S3R</button>
+        </esp-web-install-button>
+    </div>
+
+    <div class="device-card">
+        <h2>Waveshare ESP32-S3 Audio Board</h2>
+        <img src="images/waveshare-esp32-s3.jpg" alt="Waveshare ESP32-S3 Audio" />
+        <p>ES7210 dual mic, 7-LED ring, ESP32-S3, USB-C. ~$16.</p>
+        <esp-web-install-button manifest="manifest-waveshare-s3-audio.json">
+            <button slot="activate">Install on Waveshare ESP32-S3</button>
         </esp-web-install-button>
     </div>
 

@@ -14,7 +14,9 @@ Can be adapted for any ESP32 with an I2S digital microphone. Configurations curr
 
 | Device | Price | Notes |
 |--------|-------|-------|
-| M5Stack ATOM Echo | ~$13 | Built-in PDM mic, status LED |
+| M5Stack ATOM Echo | ~$13 | Built-in PDM mic, status LED, 22kHz |
+| M5Stack ATOM Echo S3R | ~$15 | ES8311 codec, speaker feedback, 44.1kHz |
+| Waveshare ESP32-S3 Audio | ~$16 | ES7210 dual mic, 7-LED ring, 44.1kHz |
 
 ## Installation
 
@@ -33,7 +35,7 @@ Add to your ESPHome YAML:
       - source: github://absent42/esphome-audio-reactive
         components: [audio_reactive]
 
-See `atom-echo.yaml` for a complete config.
+See `atom-echo.yaml`, `atom-echo-s3r.yaml`, and `waveshare-s3-audio.yaml` for complete device-specific configs.
 
 ### Security (recommended)
 
@@ -85,6 +87,34 @@ Neither affects the USB web installer.
       update_interval: 50ms       # Processing interval (default: 50ms)
       beat_sensitivity: 50        # 1-100, higher = reacts to quieter onsets (default: 50)
       squelch: 10                 # 0-100, noise gate threshold (default: 10)
+      sample_rate: 22050          # Sample rate in Hz, must match microphone config (default: 22050)
+      fft_size: 512               # FFT window size: 256, 512, or 1024 (default: 512)
+      debug_logging: false        # Enable comprehensive DSP pipeline logging (default: false)
+
+## Automation Triggers
+
+The component fires ESPHome automation triggers for status events, allowing device YAMLs to wire feedback to LEDs, speakers, or other hardware:
+
+    audio_reactive:
+      on_mute_changed:        # Fired when mute state changes (button or HA switch)
+        - ...
+      on_calibration_started: # Fired when quiet or music calibration begins
+        - ...
+      on_calibration_complete: # Fired when calibration finishes
+        - ...
+      on_silence_changed:     # Fired when silence state transitions
+        - ...
+
+See the device YAML files for examples of LED and speaker tone feedback.
+
+## Debug Logging
+
+Enable comprehensive DSP pipeline logging for troubleshooting:
+
+    audio_reactive:
+      debug_logging: true
+
+When enabled, logs every 2 seconds: raw FFT magnitudes, scaled values, AGC gains, silence state, calibration state, published sensor values, sample rate, FFT size, and ring buffer fill level. Disable for production use.
 
 ## Calibration
 
@@ -106,7 +136,7 @@ This sets the noise gate threshold and per-band noise floors based on your room'
 Teaches the device what typical music levels look like in your setup, so the sensors produce a useful 0-1 range.
 
 1. Play music at your typical listening volume
-2. Press **Calibrate Music Level** in Home Assistant
+2. **Triple-click** the device button, or press **Calibrate Music Level** in Home Assistant
 3. The LED glows blue for 5 seconds while sampling
 4. The LED brightens briefly to confirm calibration is complete
 
@@ -116,14 +146,13 @@ This sets the signal scaling factor so that typical music maps to mid-range sens
 
 Run quiet room calibration first, then music calibration. If you change rooms, speaker setup, or device placement, re-run both calibrations.
 
-## Button Actions (ATOM Echo)
+## Button Actions
 
-| Action | What it does |
-|--------|-------------|
-| **Double click** | Calibrate quiet room (3-second green LED) |
-| **Long press (1s+)** | Toggle microphone mute (red LED when muted) |
-
-AGC reset and music calibration are available from Home Assistant only (button entities).
+| Action | ATOM Echo | ATOM Echo S3R | Waveshare |
+|--------|-----------|---------------|-----------|
+| **Double click** | Calibrate quiet (green LED) | Calibrate quiet (speaker tone) | Calibrate quiet (green LEDs) |
+| **Triple click** | Calibrate music (green LED) | Calibrate music (speaker tone) | Calibrate music (green LEDs) |
+| **Long press (1s+)** | Toggle mute (red LED) | Toggle mute (speaker tone) | Toggle mute (red LEDs) |
 
 ## Detection Modes
 
@@ -139,9 +168,9 @@ Switch between modes via the Detection Mode select entity, or the integration se
 
 ## How It Works
 
-1. I2S microphone captures audio at 22,050 Hz sample rate
+1. Audio is captured at the configured sample rate (default 22,050 Hz for ATOM Echo, 44,100 Hz for S3R and Waveshare devices)
 2. Ring buffer feeds samples to a dedicated FreeRTOS FFT task on core 0
-3. 512-sample FFT with 75% overlap (~5.8ms per frame) produces frequency magnitudes
+3. Configurable FFT window (256, 512, or 1024 samples; default 512) with 75% overlap produces frequency magnitudes
 4. 16 frequency bands are computed with pink noise correction
 5. PI-controller AGC normalizes energy values with configurable attack/release
 6. Spectral flux onset detection identifies musical events across all frequency bands

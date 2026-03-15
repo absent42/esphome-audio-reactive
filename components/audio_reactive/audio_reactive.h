@@ -11,6 +11,7 @@
 #include "dynamics_limiter.h"
 
 #include "esphome/core/component.h"
+#include "esphome/core/automation.h"
 #include "esphome/core/preferences.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
@@ -135,6 +136,9 @@ class AudioReactiveComponent : public Component {
     void set_update_interval(uint32_t interval_ms) { update_interval_ms_ = interval_ms; }
     void set_beat_sensitivity(int sensitivity) { beat_sensitivity_ = sensitivity; }
     void set_squelch(float squelch) { squelch_ = squelch; }
+    void set_sample_rate(float rate) { sample_rate_ = rate; }
+    void set_fft_size(uint16_t size) { fft_size_ = size; hop_size_ = size / 4; }
+    void set_debug_logging(bool enabled) { debug_logging_ = enabled; }
 
     // Sensor setters (called from sensor.py / binary_sensor.py codegen)
     void set_bass_energy_sensor(sensor::Sensor *s) { bass_sensor_ = s; }
@@ -169,6 +173,12 @@ class AudioReactiveComponent : public Component {
     void start_quiet_calibration();
     /// Start music calibration (5 seconds, measures typical playback level).
     void start_music_calibration();
+
+    // Automation trigger callback registration
+    void add_on_mute_changed_callback(std::function<void()> &&callback) { on_mute_changed_callbacks_.add(std::move(callback)); }
+    void add_on_calibration_started_callback(std::function<void()> &&callback) { on_calibration_started_callbacks_.add(std::move(callback)); }
+    void add_on_calibration_complete_callback(std::function<void()> &&callback) { on_calibration_complete_callbacks_.add(std::move(callback)); }
+    void add_on_silence_changed_callback(std::function<void()> &&callback) { on_silence_changed_callbacks_.add(std::move(callback)); }
 
     friend class AudioReactiveBeatSensitivityNumber;
     friend class AudioReactiveMicrophoneMuteSwitch;
@@ -221,13 +231,15 @@ class AudioReactiveComponent : public Component {
     void finish_music_calibration();
     void apply_calibration();
 
-    // DSP pipeline
-    static constexpr size_t FFT_SIZE = 512;
-    static constexpr float SAMPLE_RATE = 22050.0f;
-    static constexpr size_t HOP_SIZE = 128;  // 75% overlap
+    // DSP pipeline — configurable parameters
+    uint16_t fft_size_{512};
+    float sample_rate_{22050.0f};
+    uint16_t hop_size_{128};  // fft_size / 4 (75% overlap)
+    bool debug_logging_{false};
 
-    RingBuffer<float, 2048> ring_buffer_;  // 2048 for overlap headroom
-    FFTProcessor<FFT_SIZE> *fft_{nullptr};
+    // Ring buffer: 2048 for overlap headroom (sufficient for fft_size up to 1024)
+    RingBuffer<float, 2048> ring_buffer_;
+    FFTProcessor<512> *fft_{nullptr};  // Template param fixed at 512 for now
     BandAggregator band_agg_;
     AGC agc_bass_{AGC_NORMAL};
     AGC agc_mid_{AGC_NORMAL};
@@ -266,6 +278,12 @@ class AudioReactiveComponent : public Component {
     // Previous silence state for edge detection
     bool prev_silence_{false};
 
+    // Automation trigger callbacks
+    CallbackManager<void()> on_mute_changed_callbacks_;
+    CallbackManager<void()> on_calibration_started_callbacks_;
+    CallbackManager<void()> on_calibration_complete_callbacks_;
+    CallbackManager<void()> on_silence_changed_callbacks_;
+
     /// Publish zero values to all sensors (used when muted or silent).
     void publish_zeros_();
 
@@ -276,6 +294,35 @@ class AudioReactiveComponent : public Component {
         } else {
             return 0.17f * raw + 0.83f * prev;  // slow fall
         }
+    }
+};
+
+// Automation triggers
+class AudioReactiveMuteChangedTrigger : public Trigger<> {
+ public:
+    explicit AudioReactiveMuteChangedTrigger(AudioReactiveComponent *parent) {
+        parent->add_on_mute_changed_callback([this]() { this->trigger(); });
+    }
+};
+
+class AudioReactiveCalibrationStartedTrigger : public Trigger<> {
+ public:
+    explicit AudioReactiveCalibrationStartedTrigger(AudioReactiveComponent *parent) {
+        parent->add_on_calibration_started_callback([this]() { this->trigger(); });
+    }
+};
+
+class AudioReactiveCalibrationCompleteTrigger : public Trigger<> {
+ public:
+    explicit AudioReactiveCalibrationCompleteTrigger(AudioReactiveComponent *parent) {
+        parent->add_on_calibration_complete_callback([this]() { this->trigger(); });
+    }
+};
+
+class AudioReactiveSilenceChangedTrigger : public Trigger<> {
+ public:
+    explicit AudioReactiveSilenceChangedTrigger(AudioReactiveComponent *parent) {
+        parent->add_on_silence_changed_callback([this]() { this->trigger(); });
     }
 };
 

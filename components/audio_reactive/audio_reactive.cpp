@@ -13,8 +13,8 @@ void AudioReactiveComponent::setup() {
     ESP_LOGCONFIG(TAG, "Setting up AudioReactive...");
 
     // Allocate DSP pipeline
-    fft_ = new FFTProcessor<FFT_SIZE>(SAMPLE_RATE);
-    // BandAggregator uses default constructor (hardcoded 22050 Hz band definitions)
+    fft_ = new FFTProcessor<512>(sample_rate_);  // Template param fixed at 512 for now
+    band_agg_ = BandAggregator(sample_rate_, fft_size_);
     // AGC instances are stack-allocated with AGC_NORMAL preset
     // Set per-band noise floors calibrated to PDM mic quiet room levels.
     // Values are PRE-SCALED (raw / 20): quiet bass=0.15-2.25, mid=0.04-0.15, high=0.01-0.04
@@ -67,23 +67,24 @@ void AudioReactiveComponent::setup() {
         cal_store_ = {5.0f, 0.25f, 0.08f, 0.03f, 0.10f, 1.0f / 20.0f, false, false};
     }
 
-    ESP_LOGI(TAG, "Initialized (FFT=%u, rate=%.0f, interval=%ums, sensitivity=%d, squelch=%.0f)",
-             FFT_SIZE, SAMPLE_RATE, update_interval_ms_, beat_sensitivity_, squelch_);
+    ESP_LOGI(TAG, "Initialized (FFT=%u, rate=%.0f, hop=%u, interval=%ums, sensitivity=%d, squelch=%.0f)",
+             fft_size_, sample_rate_, hop_size_, update_interval_ms_, beat_sensitivity_, squelch_);
 }
 
 void AudioReactiveComponent::fft_task_func(void *param) {
     auto *self = static_cast<AudioReactiveComponent *>(param);
-    float fft_buffer[FFT_SIZE];
+    // Stack buffer sized for FFT template (fixed at 512 for now)
+    float fft_buffer[512];
 
     for (;;) {
         // Wait until we have enough samples for a full FFT frame
-        if (self->ring_buffer_.available() < FFT_SIZE) {
+        if (self->ring_buffer_.available() < self->fft_size_) {
             vTaskDelay(pdMS_TO_TICKS(1));
             continue;
         }
 
-        // Peek 512 samples (don't consume yet — we only advance by HOP_SIZE)
-        self->ring_buffer_.peek(fft_buffer, FFT_SIZE);
+        // Peek fft_size_ samples (don't consume yet — we only advance by hop_size_)
+        self->ring_buffer_.peek(fft_buffer, self->fft_size_);
 
         // Process FFT
         self->fft_->process(fft_buffer);
@@ -98,8 +99,8 @@ void AudioReactiveComponent::fft_task_func(void *param) {
         self->new_data_available_ = true;
         taskEXIT_CRITICAL(&self->fft_mux_);
 
-        // Advance by HOP_SIZE (75% overlap: 512 - 128 = 384 samples reused)
-        self->ring_buffer_.advance(HOP_SIZE);
+        // Advance by hop_size_ (75% overlap)
+        self->ring_buffer_.advance(self->hop_size_);
     }
 }
 
@@ -142,50 +143,52 @@ void AudioReactiveComponent::loop() {
 
     last_process_ms_ = now;
 
-    // Debug: comprehensive logging every 2 seconds
-    static uint32_t last_debug_ms = 0;
-    static float raw_amp_min = 1e10f, raw_amp_max = 0.0f;
-    static float raw_bass_min = 1e10f, raw_bass_max = 0.0f;
-    // Track min/max of raw values between log intervals
-    if (energies.amplitude < raw_amp_min) raw_amp_min = energies.amplitude;
-    if (energies.amplitude > raw_amp_max) raw_amp_max = energies.amplitude;
-    if (energies.bass < raw_bass_min) raw_bass_min = energies.bass;
-    if (energies.bass > raw_bass_max) raw_bass_max = energies.bass;
+    // Debug: comprehensive logging every 2 seconds (gated by debug_logging_)
+    if (debug_logging_) {
+        static uint32_t last_debug_ms = 0;
+        static float raw_amp_min = 1e10f, raw_amp_max = 0.0f;
+        static float raw_bass_min = 1e10f, raw_bass_max = 0.0f;
+        // Track min/max of raw values between log intervals
+        if (energies.amplitude < raw_amp_min) raw_amp_min = energies.amplitude;
+        if (energies.amplitude > raw_amp_max) raw_amp_max = energies.amplitude;
+        if (energies.bass < raw_bass_min) raw_bass_min = energies.bass;
+        if (energies.bass > raw_bass_max) raw_bass_max = energies.bass;
 
-    if ((now - last_debug_ms) >= 2000) {
-        ESP_LOGI(TAG, "=== AUDIO DEBUG ===");
-        ESP_LOGI(TAG, "RAW (current): amp=%.4f bass=%.4f mid=%.4f high=%.4f",
-                 energies.amplitude, energies.bass, energies.mid, energies.high);
-        ESP_LOGI(TAG, "RAW (2s range): amp=[%.4f..%.4f] bass=[%.4f..%.4f]",
-                 raw_amp_min, raw_amp_max, raw_bass_min, raw_bass_max);
-        ESP_LOGI(TAG, "RAW bands: [%.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f]",
-                 energies.bands[0], energies.bands[1], energies.bands[2], energies.bands[3],
-                 energies.bands[4], energies.bands[5], energies.bands[6], energies.bands[7],
-                 energies.bands[8], energies.bands[9], energies.bands[10], energies.bands[11],
-                 energies.bands[12], energies.bands[13], energies.bands[14], energies.bands[15]);
-        ESP_LOGI(TAG, "SCALED: bass=%.3f mid=%.3f high=%.3f amp=%.3f (raw_scale=%.4f)",
-                 energies.bass * raw_scale_, energies.mid * raw_scale_,
-                 energies.high * raw_scale_, energies.amplitude * raw_scale_, raw_scale_);
-        ESP_LOGI(TAG, "AGC gains: bass=%.2f mid=%.2f high=%.2f amp=%.2f",
-                 agc_bass_.current_gain(), agc_mid_.current_gain(),
-                 agc_high_.current_gain(), agc_amp_.current_gain());
-        float dbg_silence_signal = energies.mid + energies.high;
-        ESP_LOGI(TAG, "Silence signal (mid+high)=%.2f | Squelch=%.1f (threshold=%.2f)",
-                 dbg_silence_signal, silence_det_.squelch(), silence_det_.squelch() * 0.5f);
-        ESP_LOGI(TAG, "Silence state: prev_silence=%d", prev_silence_);
-        ESP_LOGI(TAG, "Calibration: quiet=%s music=%s scale=%.4f squelch_thresh=%.2f",
-                 cal_store_.quiet_calibrated ? "yes" : "no",
-                 cal_store_.music_calibrated ? "yes" : "no",
-                 cal_store_.raw_scale, cal_store_.squelch_threshold);
-        ESP_LOGI(TAG, "Published: bass=%.3f mid=%.3f high=%.3f amp=%.3f",
-                 smooth_bass_, smooth_mid_, smooth_high_, smooth_amp_);
-        ESP_LOGI(TAG, "Ring buffer: %u/%u samples",
-                 static_cast<unsigned>(ring_buffer_.available()),
-                 static_cast<unsigned>(ring_buffer_.capacity()));
-        // Reset min/max trackers
-        raw_amp_min = 1e10f; raw_amp_max = 0.0f;
-        raw_bass_min = 1e10f; raw_bass_max = 0.0f;
-        last_debug_ms = now;
+        if ((now - last_debug_ms) >= 2000) {
+            ESP_LOGI(TAG, "=== AUDIO DEBUG === (sample_rate=%.0f, fft_size=%u)", sample_rate_, fft_size_);
+            ESP_LOGI(TAG, "RAW (current): amp=%.4f bass=%.4f mid=%.4f high=%.4f",
+                     energies.amplitude, energies.bass, energies.mid, energies.high);
+            ESP_LOGI(TAG, "RAW (2s range): amp=[%.4f..%.4f] bass=[%.4f..%.4f]",
+                     raw_amp_min, raw_amp_max, raw_bass_min, raw_bass_max);
+            ESP_LOGI(TAG, "RAW bands: [%.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f]",
+                     energies.bands[0], energies.bands[1], energies.bands[2], energies.bands[3],
+                     energies.bands[4], energies.bands[5], energies.bands[6], energies.bands[7],
+                     energies.bands[8], energies.bands[9], energies.bands[10], energies.bands[11],
+                     energies.bands[12], energies.bands[13], energies.bands[14], energies.bands[15]);
+            ESP_LOGI(TAG, "SCALED: bass=%.3f mid=%.3f high=%.3f amp=%.3f (raw_scale=%.4f)",
+                     energies.bass * raw_scale_, energies.mid * raw_scale_,
+                     energies.high * raw_scale_, energies.amplitude * raw_scale_, raw_scale_);
+            ESP_LOGI(TAG, "AGC gains: bass=%.2f mid=%.2f high=%.2f amp=%.2f",
+                     agc_bass_.current_gain(), agc_mid_.current_gain(),
+                     agc_high_.current_gain(), agc_amp_.current_gain());
+            float dbg_silence_signal = energies.mid + energies.high;
+            ESP_LOGI(TAG, "Silence signal (mid+high)=%.2f | Squelch=%.1f (threshold=%.2f)",
+                     dbg_silence_signal, silence_det_.squelch(), silence_det_.squelch() * 0.5f);
+            ESP_LOGI(TAG, "Silence state: prev_silence=%d", prev_silence_);
+            ESP_LOGI(TAG, "Calibration: quiet=%s music=%s scale=%.4f squelch_thresh=%.2f",
+                     cal_store_.quiet_calibrated ? "yes" : "no",
+                     cal_store_.music_calibrated ? "yes" : "no",
+                     cal_store_.raw_scale, cal_store_.squelch_threshold);
+            ESP_LOGI(TAG, "Published: bass=%.3f mid=%.3f high=%.3f amp=%.3f",
+                     smooth_bass_, smooth_mid_, smooth_high_, smooth_amp_);
+            ESP_LOGI(TAG, "Ring buffer: %u/%u samples",
+                     static_cast<unsigned>(ring_buffer_.available()),
+                     static_cast<unsigned>(ring_buffer_.capacity()));
+            // Reset min/max trackers
+            raw_amp_min = 1e10f; raw_amp_max = 0.0f;
+            raw_bass_min = 1e10f; raw_bass_max = 0.0f;
+            last_debug_ms = now;
+        }
     }
 
     // Calibration accumulation — runs BEFORE silence gate so quiet room
@@ -239,16 +242,22 @@ void AudioReactiveComponent::loop() {
         }
 
         // Update silence sensor (edge-triggered)
-        if (silence_sensor_ != nullptr && silence_result.is_silent != prev_silence_) {
-            silence_sensor_->publish_state(silence_result.is_silent);
+        if (silence_result.is_silent != prev_silence_) {
+            if (silence_sensor_ != nullptr) {
+                silence_sensor_->publish_state(silence_result.is_silent);
+            }
+            on_silence_changed_callbacks_.call();
         }
         prev_silence_ = silence_result.is_silent;
         return;
     }
 
     // Not silent — clear silence state
-    if (silence_sensor_ != nullptr && prev_silence_) {
-        silence_sensor_->publish_state(false);
+    if (prev_silence_) {
+        if (silence_sensor_ != nullptr) {
+            silence_sensor_->publish_state(false);
+        }
+        on_silence_changed_callbacks_.call();
     }
     prev_silence_ = false;
 
@@ -360,6 +369,8 @@ void AudioReactiveComponent::set_muted(bool muted) {
     if (mute_switch_ != nullptr) {
         mute_switch_->publish_state(muted);
     }
+
+    on_mute_changed_callbacks_.call();
 }
 
 void AudioReactiveComponent::toggle_mute() {
@@ -450,6 +461,7 @@ void AudioReactiveComponent::start_quiet_calibration() {
     cal_max_high_ = 0;
     cal_max_amp_ = 0;
     ESP_LOGI(TAG, "Quiet room calibration started (3 seconds)...");
+    on_calibration_started_callbacks_.call();
 }
 
 void AudioReactiveComponent::finish_quiet_calibration() {
@@ -471,6 +483,7 @@ void AudioReactiveComponent::finish_quiet_calibration() {
     ESP_LOGI(TAG, "Quiet calibration done: squelch_threshold=%.2f, noise_floors: bass=%.3f mid=%.3f high=%.3f amp=%.3f",
              cal_store_.squelch_threshold, cal_store_.noise_floor_bass,
              cal_store_.noise_floor_mid, cal_store_.noise_floor_high, cal_store_.noise_floor_amp);
+    on_calibration_complete_callbacks_.call();
 }
 
 void AudioReactiveComponent::start_music_calibration() {
@@ -482,6 +495,7 @@ void AudioReactiveComponent::start_music_calibration() {
     cal_max_high_ = 0;
     cal_sample_count_ = 0;
     ESP_LOGI(TAG, "Music calibration started (5 seconds) — play music at typical volume...");
+    on_calibration_started_callbacks_.call();
 }
 
 void AudioReactiveComponent::finish_music_calibration() {
@@ -498,6 +512,7 @@ void AudioReactiveComponent::finish_music_calibration() {
 
         ESP_LOGI(TAG, "Music calibration done: avg_amp=%.2f, raw_scale=%.4f",
                  avg_amp, cal_store_.raw_scale);
+        on_calibration_complete_callbacks_.call();
     }
 }
 
@@ -529,8 +544,10 @@ void AudioReactiveCalibrateMusictButton::press_action() {
 
 void AudioReactiveComponent::dump_config() {
     ESP_LOGCONFIG(TAG, "AudioReactive:");
-    ESP_LOGCONFIG(TAG, "  FFT size: %u (fixed)", FFT_SIZE);
-    ESP_LOGCONFIG(TAG, "  Sample rate: %.0f Hz", SAMPLE_RATE);
+    ESP_LOGCONFIG(TAG, "  Sample rate: %.0f Hz", sample_rate_);
+    ESP_LOGCONFIG(TAG, "  FFT size: %u", fft_size_);
+    ESP_LOGCONFIG(TAG, "  Hop size: %u", hop_size_);
+    ESP_LOGCONFIG(TAG, "  Debug logging: %s", debug_logging_ ? "yes" : "no");
     ESP_LOGCONFIG(TAG, "  Update interval: %u ms", update_interval_ms_);
     ESP_LOGCONFIG(TAG, "  Beat sensitivity: %d", beat_sensitivity_);
     ESP_LOGCONFIG(TAG, "  Squelch: %.0f", squelch_);

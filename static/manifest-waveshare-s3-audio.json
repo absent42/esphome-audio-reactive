@@ -1,12 +1,12 @@
 {
-    "name": "Audio Reactive Sensor (ATOM Echo)",
+    "name": "Audio Reactive Sensor (Waveshare ESP32-S3 Audio)",
     "version": "0.2.0",
     "builds": [
         {
-            "chipFamily": "ESP32",
+            "chipFamily": "ESP32-S3",
             "parts": [
                 {
-                    "path": "firmware/atom-echo.factory.bin",
+                    "path": "firmware/waveshare-s3-audio.factory.bin",
                     "offset": 0
                 }
             ]

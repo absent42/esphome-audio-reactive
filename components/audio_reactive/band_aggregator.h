@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 
 namespace esphome {
 namespace audio_reactive {
@@ -23,35 +24,56 @@ struct BandEnergies16 {
     float amplitude;  // Overall RMS (all bins except DC)
 };
 
+/// 17 frequency boundaries (in Hz) defining 16 bands.
+/// Derived from the original WLED-based bin indices at 22050 Hz / 512-point FFT (43.066 Hz/bin).
+/// Band i spans [BAND_FREQ_BOUNDARIES[i], BAND_FREQ_BOUNDARIES[i+1]).
+static constexpr float BAND_FREQ_BOUNDARIES[17] = {
+    43.06640625f,     // bin 1   — start of band 0
+    129.19921875f,    // bin 3   — start of band 1
+    215.33203125f,    // bin 5   — start of band 2
+    344.53125f,       // bin 8   — start of band 3
+    473.73046875f,    // bin 11  — start of band 4
+    645.99609375f,    // bin 15  — start of band 5
+    861.328125f,      // bin 20  — start of band 6
+    1162.79296875f,   // bin 27  — start of band 7
+    1550.390625f,     // bin 36  — start of band 8
+    2024.12109375f,   // bin 47  — start of band 9
+    2627.05078125f,   // bin 61  — start of band 10
+    3402.24609375f,   // bin 79  — start of band 11
+    4392.7734375f,    // bin 102 — start of band 12
+    5641.69921875f,   // bin 131 — start of band 13
+    7278.22265625f,   // bin 169 — start of band 14
+    9388.4765625f,    // bin 218 — start of band 15
+    11025.0f,         // bin 256 — end of band 15 (Nyquist at 22050/512)
+};
+
 struct BandDefinition {
     size_t bin_start;
     size_t bin_end;  // exclusive
 };
 
-/// 16-band definitions adapted from WLED for 22,050 Hz sample rate (~43 Hz/bin).
-static constexpr BandDefinition BANDS_16[16] = {
-    {1,   3},    // 0:  43-129 Hz   (sub-bass)
-    {3,   5},    // 1:  129-215 Hz  (bass)
-    {5,   8},    // 2:  215-344 Hz  (bass)
-    {8,   11},   // 3:  344-473 Hz  (bass/mid)
-    {11,  15},   // 4:  473-645 Hz  (mid)
-    {15,  20},   // 5:  645-860 Hz  (mid)
-    {20,  27},   // 6:  860-1161 Hz (mid)
-    {27,  36},   // 7:  1161-1548 Hz(mid)
-    {36,  47},   // 8:  1548-2021 Hz(mid)
-    {47,  61},   // 9:  2021-2623 Hz(mid/high)
-    {61,  79},   // 10: 2623-3397 Hz(high-mid)
-    {79,  102},  // 11: 3397-4386 Hz(high-mid)
-    {102, 131},  // 12: 4386-5634 Hz(high)
-    {131, 169},  // 13: 5634-7268 Hz(high)
-    {169, 218},  // 14: 7268-9374 Hz(high)
-    {218, 256},  // 15: 9374-11008 Hz(high)
-};
-
 /// Groups FFT magnitude bins into 16 bands plus bass/mid/high summary energies.
 class BandAggregator {
  public:
-    BandAggregator() = default;
+    /// Default constructor: 22050 Hz sample rate, 512-point FFT (backwards compatible).
+    BandAggregator() : BandAggregator(22050.0f, 512) {}
+
+    /// Construct with explicit sample rate and FFT size.
+    /// Dynamically computes bin-to-band mappings from frequency boundaries.
+    BandAggregator(float sample_rate, uint16_t fft_size)
+        : hz_per_bin_(sample_rate / static_cast<float>(fft_size)) {
+        size_t num_bins = fft_size / 2;  // Nyquist limit
+        for (int b = 0; b < 16; b++) {
+            size_t bin_start = freq_to_bin(BAND_FREQ_BOUNDARIES[b]);
+            size_t bin_end   = freq_to_bin(BAND_FREQ_BOUNDARIES[b + 1]);
+            // Clamp to available bins
+            if (bin_start >= num_bins) bin_start = num_bins;
+            if (bin_end > num_bins)    bin_end = num_bins;
+            // Ensure at least 1 bin per band (if start < num_bins)
+            if (bin_end <= bin_start && bin_start < num_bins) bin_end = bin_start + 1;
+            bands_[b] = {bin_start, bin_end};
+        }
+    }
 
     /// Aggregate FFT magnitudes into 16-band energies with summary values.
     /// @param magnitudes  FFT magnitude bins (index 0 = DC bin, skipped).
@@ -60,8 +82,8 @@ class BandAggregator {
         BandEnergies16 result{};
 
         for (int b = 0; b < 16; b++) {
-            size_t start = BANDS_16[b].bin_start;
-            size_t end = BANDS_16[b].bin_end;  // exclusive
+            size_t start = bands_[b].bin_start;
+            size_t end = bands_[b].bin_end;  // exclusive
             // Clamp to available bins
             if (start >= bin_count) {
                 result.bands[b] = 0.0f;
@@ -96,7 +118,22 @@ class BandAggregator {
         return result;
     }
 
+    /// Access computed band definitions (for testing/inspection).
+    const BandDefinition& band(int index) const { return bands_[index]; }
+
+    /// Get the computed Hz-per-bin value.
+    float hz_per_bin() const { return hz_per_bin_; }
+
  private:
+    float hz_per_bin_;
+    BandDefinition bands_[16];
+
+    /// Convert a frequency (Hz) to the nearest FFT bin index.
+    size_t freq_to_bin(float freq_hz) const {
+        float bin = freq_hz / hz_per_bin_;
+        return static_cast<size_t>(roundf(bin));
+    }
+
     /// RMS energy of bins [start, end) — end is exclusive.
     static float rms_energy_exclusive(const float* data, size_t start, size_t end) {
         if (start >= end) return 0.0f;

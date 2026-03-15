@@ -168,6 +168,119 @@ void test_aggregate16_consistent_with_aggregate() {
     printf("PASS: test_aggregate16_consistent_with_aggregate\n");
 }
 
+// ── Dynamic sample rate / FFT size tests ─────────────────────────────────────
+
+void test_aggregate16_default_matches_22050() {
+    // Default constructor must produce identical bin mappings to explicit (22050, 512).
+    BandAggregator agg_default;
+    BandAggregator agg_explicit(22050.0f, 512);
+
+    // Verify hz_per_bin matches
+    assert(near(agg_default.hz_per_bin(), agg_explicit.hz_per_bin()));
+
+    // Verify all 16 band definitions are identical
+    for (int b = 0; b < 16; b++) {
+        assert(agg_default.band(b).bin_start == agg_explicit.band(b).bin_start);
+        assert(agg_default.band(b).bin_end == agg_explicit.band(b).bin_end);
+    }
+
+    // Verify identical output on a non-trivial signal
+    float magnitudes[256] = {};
+    for (int i = 1; i < 256; i++) magnitudes[i] = static_cast<float>(i % 11) * 0.05f;
+
+    auto r_default  = agg_default.aggregate16(magnitudes, 256);
+    auto r_explicit = agg_explicit.aggregate16(magnitudes, 256);
+
+    for (int b = 0; b < 16; b++) {
+        assert(near(r_default.bands[b], r_explicit.bands[b]));
+    }
+    assert(near(r_default.bass, r_explicit.bass));
+    assert(near(r_default.mid, r_explicit.mid));
+    assert(near(r_default.high, r_explicit.high));
+    assert(near(r_default.amplitude, r_explicit.amplitude));
+
+    printf("PASS: test_aggregate16_default_matches_22050\n");
+}
+
+void test_aggregate16_44100hz_1024fft() {
+    // 44100/1024 has the same hz_per_bin (43.066 Hz) as 22050/512,
+    // so bin mappings must be identical.
+    BandAggregator agg_ref(22050.0f, 512);
+    BandAggregator agg_44k(44100.0f, 1024);
+
+    assert(near(agg_ref.hz_per_bin(), agg_44k.hz_per_bin()));
+
+    for (int b = 0; b < 16; b++) {
+        assert(agg_ref.band(b).bin_start == agg_44k.band(b).bin_start);
+        assert(agg_ref.band(b).bin_end == agg_44k.band(b).bin_end);
+    }
+
+    // Run on a signal and verify identical results (same bin count = 256 for both 512/2)
+    // Note: 1024/2 = 512 bins, but we only use 256 to match the reference signal size.
+    float magnitudes[256] = {};
+    for (int i = 1; i < 256; i++) magnitudes[i] = static_cast<float>(i % 7) * 0.1f;
+
+    auto r_ref = agg_ref.aggregate16(magnitudes, 256);
+    auto r_44k = agg_44k.aggregate16(magnitudes, 256);
+
+    for (int b = 0; b < 16; b++) {
+        assert(near(r_ref.bands[b], r_44k.bands[b]));
+    }
+    assert(near(r_ref.bass, r_44k.bass));
+    assert(near(r_ref.mid, r_44k.mid));
+    assert(near(r_ref.high, r_44k.high));
+    assert(near(r_ref.amplitude, r_44k.amplitude));
+
+    printf("PASS: test_aggregate16_44100hz_1024fft\n");
+}
+
+void test_aggregate16_48000hz_1024fft() {
+    // 48000/1024 = 46.875 Hz/bin — different from 22050/512.
+    // Verify the bin mappings are computed correctly from frequency boundaries.
+    BandAggregator agg(48000.0f, 1024);
+
+    assert(near(agg.hz_per_bin(), 46.875f));
+
+    // Expected bin mappings for 48000/1024 (46.875 Hz/bin):
+    // freq_to_bin(f) = round(f / 46.875)
+    // Boundary freqs → expected bins:
+    //   43.066 →  0.919 → 1      129.199 →  2.756 → 3
+    //  215.332 →  4.594 → 5      344.531 →  7.350 → 7
+    //  473.730 → 10.106 → 10     645.996 → 13.781 → 14
+    //  861.328 → 18.375 → 18    1162.793 → 24.806 → 25
+    // 1550.391 → 33.075 → 33    2024.121 → 43.181 → 43
+    // 2627.051 → 56.044 → 56    3402.246 → 72.581 → 73
+    // 4392.773 → 93.713 → 94    5641.699 → 120.356 → 120
+    // 7278.223 → 155.269 → 155   9388.477 → 200.288 → 200
+    // 11025.0  → 235.200 → 235
+    size_t expected_starts[16] = {1, 3, 5, 7, 10, 14, 18, 25, 33, 43, 56, 73, 94, 120, 155, 200};
+    size_t expected_ends[16]   = {3, 5, 7, 10, 14, 18, 25, 33, 43, 56, 73, 94, 120, 155, 200, 235};
+
+    for (int b = 0; b < 16; b++) {
+        if (agg.band(b).bin_start != expected_starts[b] ||
+            agg.band(b).bin_end != expected_ends[b]) {
+            printf("FAIL: band %d: expected [%zu, %zu) got [%zu, %zu)\n",
+                   b, expected_starts[b], expected_ends[b],
+                   agg.band(b).bin_start, agg.band(b).bin_end);
+            assert(false);
+        }
+    }
+
+    // Verify the aggregator works: energize a bin in band 5 (bins 14-17) and check
+    float magnitudes[512] = {};
+    magnitudes[15] = 1.0f;  // inside band 5 [14, 18)
+    auto r = agg.aggregate16(magnitudes, 512);
+    assert(r.bands[5] > 0.0f);
+    // Adjacent bands should be zero
+    assert(r.bands[4] == 0.0f);
+    assert(r.bands[6] == 0.0f);
+    // Band 5 is in the mid group (bands 4-9)
+    assert(r.mid > 0.0f);
+
+    printf("PASS: test_aggregate16_48000hz_1024fft (band5=%.4f mid=%.4f)\n",
+           r.bands[5], r.mid);
+}
+
 // ── main ──────────────────────────────────────────────────────────────────────
 
 int main() {
@@ -183,6 +296,11 @@ int main() {
     test_aggregate16_summary_groupings();
     test_aggregate16_amplitude_all_bins();
     test_aggregate16_consistent_with_aggregate();
+
+    // Dynamic sample rate / FFT size tests
+    test_aggregate16_default_matches_22050();
+    test_aggregate16_44100hz_1024fft();
+    test_aggregate16_48000hz_1024fft();
 
     printf("All band aggregator tests passed.\n");
     return 0;

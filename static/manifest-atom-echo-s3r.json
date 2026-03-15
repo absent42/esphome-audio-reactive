@@ -1,12 +1,12 @@
 {
-    "name": "Audio Reactive Sensor (ATOM Echo)",
+    "name": "Audio Reactive Sensor (ATOM Echo S3R)",
     "version": "0.2.0",
     "builds": [
         {
-            "chipFamily": "ESP32",
+            "chipFamily": "ESP32-S3",
             "parts": [
                 {
-                    "path": "firmware/atom-echo.factory.bin",
+                    "path": "firmware/atom-echo-s3r.factory.bin",
                     "offset": 0
                 }
             ]
