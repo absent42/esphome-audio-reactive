@@ -1,0 +1,477 @@
+# =============================================================================
+# ESPHome Audio Reactive Sensor — Annotated Example Configuration
+# =============================================================================
+#
+# This file documents every configurable option with explanations.
+# It is NOT a working config — it's a reference for building your own.
+# For ready-to-flash configs, see: atom-echo.yaml, atom-echo-s3r.yaml,
+# waveshare-s3-audio.yaml, or m5stickc-plus2.yaml
+#
+# Full documentation: https://github.com/absent42/esphome-audio-reactive
+# =============================================================================
+
+esphome:
+  name: audio-reactive            # Device hostname on your network
+  friendly_name: Audio Reactive Sensor  # Display name in Home Assistant
+
+  # M5StickC Plus2 only — GPIO4 must stay HIGH or the device powers off
+  # on_boot:
+  #   priority: 900
+  #   then:
+  #     - output.turn_on: power_hold
+
+# --- ESP32 Board Configuration -----------------------------------------------
+# Choose the board that matches your hardware.
+
+esp32:
+  board: m5stack-atom              # ATOM Echo
+  # board: esp32-s3-devkitc-1     # ATOM Echo S3R / Waveshare ESP32-S3
+  # board: m5stick-c              # M5StickC Plus2
+  framework:
+    type: esp-idf                  # Always use esp-idf (not Arduino)
+
+# --- PSRAM (ESP32-S3 devices only) -------------------------------------------
+# Required for ESP32-S3 devices with PSRAM. Omit entirely for standard ESP32.
+
+# psram:
+#   mode: octal
+#   speed: 80MHz
+#   ignore_not_found: false        # Set true only if PSRAM is guaranteed
+
+# --- WiFi --------------------------------------------------------------------
+# Leave empty for web installer (improv_serial handles credentials).
+# Or specify credentials for manual ESPHome setup.
+
+wifi:
+  # ssid: !secret wifi_ssid       # Uncomment for manual setup
+  # password: !secret wifi_password
+  # power_save_mode: none          # Recommended for ESP32-S3 devices
+
+improv_serial:                     # Allows WiFi setup via serial after flashing
+
+api:                               # Home Assistant API connection
+
+logger:
+  level: INFO                      # Set to DEBUG for troubleshooting
+
+# --- External Component ------------------------------------------------------
+
+external_components:
+  - source: github://absent42/esphome-audio-reactive  # From GitHub (released)
+  # - source: components            # From local directory (development)
+    components: [audio_reactive]
+
+# =============================================================================
+# I2C Bus (required for codec-based devices only)
+# =============================================================================
+# Not needed for PDM devices (ATOM Echo, M5StickC Plus2).
+# Required for devices with audio codecs (ATOM Echo S3R, Waveshare).
+
+# i2c:
+#   sda: GPIO11                    # Waveshare
+#   scl: GPIO10                    # Waveshare
+#   # sda: GPIO0                   # ATOM Echo S3R
+#   # scl: GPIO45                  # ATOM Echo S3R
+
+# --- I2C GPIO Expander (Waveshare only) --------------------------------------
+# The Waveshare board uses a TCA9555 for buttons K1-K3 and speaker amp enable.
+
+# tca9555:
+#   id: ioexp
+#   address: 0x20
+
+# --- Audio Codec (codec-based devices only) -----------------------------------
+
+# ES7210 microphone ADC (Waveshare)
+# audio_adc:
+#   - platform: es7210
+#     address: 0x40
+#     id: es7210_adc
+#     sample_rate: 44100
+#     bits_per_sample: 16bit
+
+# ES8311 speaker DAC (Waveshare / ATOM Echo S3R)
+# audio_dac:
+#   - platform: es8311
+#     address: 0x18
+#     id: es8311_dac
+#     sample_rate: 44100
+#     bits_per_sample: 16bit
+
+# =============================================================================
+# I2S Audio — Microphone Input
+# =============================================================================
+
+# --- Option A: Single I2S bus (PDM devices, ATOM Echo S3R) --------------------
+
+i2s_audio:
+  i2s_lrclk_pin: GPIO33           # ATOM Echo: GPIO33, StickC Plus2: GPIO0
+  i2s_bclk_pin: GPIO19            # ATOM Echo: GPIO19, StickC Plus2: GPIO26
+  # i2s_mclk_pin: GPIO11          # Required for codec devices (S3R: GPIO11, Waveshare: GPIO12)
+
+# --- Option B: Dual I2S buses (Waveshare — shared clock pins) -----------------
+# Use this when mic and speaker share clock lines but need separate I2S instances.
+
+# i2s_audio:
+#   - id: i2s_input
+#     i2s_lrclk_pin:
+#       number: GPIO14
+#       allow_other_uses: true
+#     i2s_bclk_pin:
+#       number: GPIO13
+#       allow_other_uses: true
+#
+#   - id: i2s_output
+#     i2s_lrclk_pin:
+#       number: GPIO14
+#       allow_other_uses: true
+#     i2s_bclk_pin:
+#       number: GPIO13
+#       allow_other_uses: true
+#     i2s_mclk_pin: GPIO12
+
+# --- Microphone ---------------------------------------------------------------
+
+microphone:
+  - platform: i2s_audio
+    id: mic
+    adc_type: external
+    i2s_din_pin: GPIO23            # ATOM Echo: GPIO23, StickC Plus2: GPIO34
+    # i2s_audio_id: i2s_input      # Required when using dual I2S buses (Waveshare)
+
+    # PDM microphone (ATOM Echo, M5StickC Plus2):
+    pdm: true
+    sample_rate: 22050
+    bits_per_sample: 16bit
+    channel: right
+
+    # I2S codec microphone (ATOM Echo S3R, Waveshare):
+    # pdm: false
+    # sample_rate: 44100
+    # bits_per_sample: 16bit
+    # channel: left                # Waveshare uses left channel
+
+# =============================================================================
+# Audio Reactive Component
+# =============================================================================
+
+audio_reactive:
+  id: audio_analysis
+  microphone: mic
+
+  # --- Core settings ---
+  update_interval: 50ms           # Processing interval (default: 50ms)
+  beat_sensitivity: 50            # 1-100, higher = reacts to quieter onsets (default: 50)
+  squelch: 10                     # 0-100, noise gate threshold (default: 10)
+
+  # --- Sample rate (must match microphone config) ---
+  sample_rate: 22050              # PDM devices: 22050, codec devices: 44100
+
+  # --- FFT size ---
+  # fft_size: 512                 # 256 or 512 (default: 512). 1024 not yet supported.
+
+  # --- Debug logging ---
+  # debug_logging: true           # Logs raw FFT values, AGC gains, silence state every 2s.
+                                   # Useful for troubleshooting. Disable for production.
+
+  # ==========================================================================
+  # Status Feedback — Automation Triggers
+  # ==========================================================================
+  # Wire these to your device's feedback hardware (LEDs, speaker, buzzer).
+  # All triggers are optional. Omit any you don't need.
+
+  # --- Mute state changed (from button or Home Assistant) ---
+
+  # OPTION 1: Addressable RGB LED (ATOM Echo, Waveshare)
+  on_mute_changed:
+    - if:
+        condition:
+          switch.is_on: mic_mute
+        then:
+          - light.turn_on:
+              id: status_led           # Your light entity ID
+              red: 1
+              green: 0
+              blue: 0
+              brightness: 100%
+        else:
+          - light.turn_off: status_led
+
+  # OPTION 2: Simple GPIO LED (M5StickC Plus2 — red LED, no color choice)
+  # on_mute_changed:
+  #   - if:
+  #       condition:
+  #         switch.is_on: mic_mute
+  #       then:
+  #         - output.turn_on: led_red
+  #       else:
+  #         - output.turn_off: led_red
+
+  # OPTION 3: Speaker tones (ATOM Echo S3R — no LED)
+  # on_mute_changed:
+  #   - if:
+  #       condition:
+  #         switch.is_on: mic_mute
+  #       then:
+  #         - output.turn_on: speaker_amp_enable
+  #         - rtttl.play: "muted:d=16,o=5,b=200:c5,p,c4"
+  #         - delay: 500ms
+  #         - output.turn_off: speaker_amp_enable
+  #       else:
+  #         - output.turn_on: speaker_amp_enable
+  #         - rtttl.play: "unmuted:d=16,o=5,b=200:c4,p,c5"
+  #         - delay: 500ms
+  #         - output.turn_off: speaker_amp_enable
+
+  # --- Quiet room calibration (double-click) ---
+
+  # OPTION 1: RGB LED — green pulse during, solid green on complete
+  on_quiet_calibration_started:
+    - light.turn_on:
+        id: status_led
+        red: 0
+        green: 1
+        blue: 0
+        brightness: 50%
+        effect: pulse
+  on_quiet_calibration_complete:
+    - light.turn_on:
+        id: status_led
+        red: 0
+        green: 1
+        blue: 0
+        brightness: 100%
+        effect: none
+    - delay: 1s
+    - light.turn_off: status_led
+
+  # OPTION 2: Simple GPIO LED — on during calibration, off when done
+  # on_quiet_calibration_started:
+  #   - output.turn_on: led_red
+  # on_quiet_calibration_complete:
+  #   - output.turn_off: led_red
+
+  # OPTION 3: Speaker tone
+  # on_quiet_calibration_started:
+  #   - output.turn_on: speaker_amp_enable
+  #   - rtttl.play: "quiet_start:d=16,o=5,b=200:c5,e5"
+  # on_quiet_calibration_complete:
+  #   - rtttl.play: "quiet_done:d=8,o=5,b=200:e5,g5"
+  #   - delay: 500ms
+  #   - output.turn_off: speaker_amp_enable
+
+  # --- Music level calibration (triple-click) ---
+
+  # OPTION 1: RGB LED — blue pulse during, solid blue on complete
+  on_music_calibration_started:
+    - light.turn_on:
+        id: status_led
+        red: 0
+        green: 0
+        blue: 1
+        brightness: 50%
+        effect: pulse
+  on_music_calibration_complete:
+    - light.turn_on:
+        id: status_led
+        red: 0
+        green: 0
+        blue: 1
+        brightness: 100%
+        effect: none
+    - delay: 1s
+    - light.turn_off: status_led
+
+  # OPTION 2: Simple GPIO LED
+  # on_music_calibration_started:
+  #   - output.turn_on: led_red
+  # on_music_calibration_complete:
+  #   - output.turn_off: led_red
+
+  # OPTION 3: Speaker tone
+  # on_music_calibration_started:
+  #   - output.turn_on: speaker_amp_enable
+  #   - rtttl.play: "music_start:d=16,o=5,b=200:c5,e5,g5"
+  # on_music_calibration_complete:
+  #   - rtttl.play: "music_done:d=8,o=5,b=200:g5,c6"
+  #   - delay: 500ms
+  #   - output.turn_off: speaker_amp_enable
+
+  # --- Silence state changed (optional) ---
+  # Fires when the device transitions between silence and active audio.
+  # Useful for showing a "listening" indicator.
+  #
+  # on_silence_changed:
+  #   - logger.log: "Silence state changed"
+
+# =============================================================================
+# Sensor Entities — Published to Home Assistant
+# =============================================================================
+
+sensor:
+  - platform: audio_reactive
+    audio_reactive_id: audio_analysis
+    bass_energy:
+      name: "Bass Energy"         # 0.0-1.0, smoothed bass band energy
+    mid_energy:
+      name: "Mid Energy"          # 0.0-1.0, smoothed mid band energy
+    high_energy:
+      name: "High Energy"         # 0.0-1.0, smoothed high band energy
+    amplitude:
+      name: "Amplitude"           # 0.0-1.0, overall smoothed amplitude
+    bpm:
+      name: "BPM"                 # Estimated beats per minute
+
+binary_sensor:
+  - platform: audio_reactive
+    audio_reactive_id: audio_analysis
+    onset_detected:
+      name: "Audio Sensor"        # The entity you select in the integration
+    silence:
+      name: "Silence"             # On when room is quiet (noise gate active)
+
+# =============================================================================
+# Physical Button — Standard Actions
+# =============================================================================
+# All devices use the same button mapping:
+#   Double-click  → Calibrate quiet room (3 seconds)
+#   Triple-click  → Calibrate music level (5 seconds)
+#   Long press    → Toggle microphone mute
+#
+# Choose the GPIO for your device's primary button:
+#   ATOM Echo: GPIO39   |  ATOM Echo S3R: GPIO41
+#   Waveshare: GPIO0    |  M5StickC Plus2: GPIO39 (Button B, side)
+
+  - platform: gpio
+    pin:
+      number: GPIO39               # Change to match your device
+      inverted: true
+    name: "Device Button"
+    id: device_button
+    on_multi_click:
+      # Double click: calibrate quiet room
+      - timing:
+          - ON for at most 0.5s
+          - OFF for at most 0.5s
+          - ON for at most 0.5s
+          - OFF for at least 0.3s
+        then:
+          - button.press: calibrate_quiet_btn
+      # Triple click: calibrate music level
+      - timing:
+          - ON for at most 0.5s
+          - OFF for at most 0.5s
+          - ON for at most 0.5s
+          - OFF for at most 0.5s
+          - ON for at most 0.5s
+          - OFF for at least 0.3s
+        then:
+          - button.press: calibrate_music_btn
+      # Long press (>= 1s): toggle mute
+      - timing:
+          - ON for at least 1s
+        then:
+          - switch.toggle: mic_mute
+
+# =============================================================================
+# Control Entities
+# =============================================================================
+
+number:
+  - platform: audio_reactive
+    audio_reactive_id: audio_analysis
+    beat_sensitivity:
+      name: "Beat Sensitivity"     # 1-100, adjustable at runtime
+    squelch:
+      name: "Squelch"             # 0-100, noise gate threshold
+
+select:
+  - platform: audio_reactive
+    audio_reactive_id: audio_analysis
+    detection_mode:
+      name: "Detection Mode"      # spectral_flux (all genres) or bass_energy (rhythmic)
+
+switch:
+  - platform: audio_reactive
+    audio_reactive_id: audio_analysis
+    microphone_mute:
+      name: "Microphone Mute"
+      id: mic_mute
+
+button:
+  - platform: audio_reactive
+    audio_reactive_id: audio_analysis
+    reset_agc:
+      name: "Reset AGC"
+      id: reset_agc_btn
+    calibrate_quiet:
+      name: "Calibrate Quiet Room"
+      id: calibrate_quiet_btn
+    calibrate_music:
+      name: "Calibrate Music Level"
+      id: calibrate_music_btn
+
+# =============================================================================
+# Status Feedback Hardware
+# =============================================================================
+# Choose ONE of these sections based on your device's hardware.
+
+# --- OPTION 1: Addressable RGB LED (ATOM Echo, Waveshare) --------------------
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: status_led
+    pin: GPIO27                    # ATOM Echo: GPIO27, Waveshare: GPIO38
+    num_leds: 1                    # ATOM Echo: 1, Waveshare: 7
+    chipset: SK6812                # ATOM Echo: SK6812, Waveshare: WS2812
+    rgb_order: GRB                 # ATOM Echo: GRB, Waveshare: RGB
+    name: "Status LED"
+    effects:
+      - pulse:
+          name: pulse
+          transition_length: 500ms
+          update_interval: 500ms
+
+# --- OPTION 2: Simple GPIO LED (M5StickC Plus2) ------------------------------
+
+# output:
+#   - platform: gpio
+#     id: power_hold
+#     pin: GPIO4                   # M5StickC Plus2: keeps device powered on
+#   - platform: gpio
+#     id: led_red
+#     pin: GPIO19                  # Red LED (shared with IR transmitter)
+#   - platform: gpio
+#     id: lcd_backlight
+#     pin: GPIO27
+#     inverted: true               # Turn off LCD backlight to save power
+
+# --- OPTION 3: Speaker tones (ATOM Echo S3R) ---------------------------------
+
+# output:
+#   - platform: gpio
+#     id: speaker_amp_enable
+#     pin: GPIO18                  # NS4150B amplifier enable
+#
+# speaker:
+#   - platform: i2s_audio
+#     id: speaker_out
+#     dac_type: external
+#     i2s_dout_pin: GPIO48
+#     sample_rate: 44100
+#
+# rtttl:
+#   id: buzzer
+#   speaker: speaker_out
+
+# --- OPTION 4: Waveshare speaker via TCA9555 expander ------------------------
+
+# switch:
+#   - platform: gpio
+#     id: speaker_amp
+#     name: "Speaker Amplifier"
+#     pin:
+#       tca9555: ioexp
+#       number: 8                  # TCA9555 EXIO8
+#       inverted: false
+#     restore_mode: RESTORE_DEFAULT_OFF

@@ -17,6 +17,8 @@ jobs:
             yaml: atom-echo-s3r.yaml
           - name: waveshare-s3-audio
             yaml: waveshare-s3-audio.yaml
+          - name: m5stickc-plus2
+            yaml: m5stickc-plus2.yaml
     steps:
       - uses: actions/checkout@v6
 
