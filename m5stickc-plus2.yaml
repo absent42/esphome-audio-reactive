@@ -25,8 +25,8 @@ external_components:
     components: [audio_reactive]
 
 i2s_audio:
-  i2s_lrclk_pin: GPIO0
-  i2s_bclk_pin: GPIO26
+  i2s_lrclk_pin: GPIO26
+  i2s_bclk_pin: GPIO0
 
 microphone:
   - platform: i2s_audio
@@ -51,12 +51,12 @@ audio_reactive:
         condition:
           switch.is_on: mic_mute
         then:
-          - output.turn_on: led_red
+          - output.turn_on: builtin_led
           - script.execute:
               id: show_status
               state: 1
         else:
-          - output.turn_off: led_red
+          - output.turn_off: builtin_led
           - script.execute:
               id: show_status
               state: 0
@@ -78,14 +78,27 @@ audio_reactive:
         state: 4
 
 # Power hold — GPIO4 must stay HIGH or device powers off
-# Red LED on GPIO19 (simple on/off, shared with IR, not addressable RGB)
+# Built-in LED on GPIO10 (inverted)
+# Buzzer on GPIO2 (inverted)
 output:
   - platform: gpio
     id: power_hold
     pin: GPIO4
-  - platform: gpio
-    id: led_red
-    pin: GPIO19
+  - platform: ledc
+    pin: 10
+    inverted: true
+    id: builtin_led
+  - platform: ledc
+    pin: 27
+    inverted: false
+    id: backlight
+
+light:
+  - platform: monochromatic
+    output: backlight
+    name: "Backlight"
+    id: display_bl
+    restore_mode: ALWAYS_ON
 
 # SPI bus for the ST7789V2 TFT display
 spi:
@@ -94,21 +107,23 @@ spi:
 
 # 1.14" TFT LCD (135x240, ST7789V2) — used for status feedback
 display:
-  - platform: st7789v
+  - platform: ili9xxx
     id: tft_display
-    model: Custom
+    model: st7789v
     cs_pin: GPIO5
     dc_pin: GPIO14
     reset_pin: GPIO12
-    backlight_pin: GPIO27
-    height: 240
-    width: 135
-    offset_height: 40
-    offset_width: 52
     rotation: 90
+    color_palette: NONE
+    dimensions:
+      height: 240
+      width: 135
+      offset_height: 40
+      offset_width: 52
+    invert_colors: true
     update_interval: never
     lambda: |-
-      // Display is updated on-demand by scripts, not continuously
+      // Display is updated on-demand via show_status script
 
 # Global to track display state
 globals:
@@ -222,7 +237,7 @@ binary_sensor:
   - platform: gpio
     pin:
       number: GPIO37
-      inverted: true
+      inverted: false
     name: "Button A"
     id: button_a
 
