@@ -13,7 +13,7 @@ psram:
   ignore_not_found: false
 
 wifi:
-  power_save_mode: none
+  power_save_mode: none  # Disabled for real-time audio streaming; enable for battery use
 
 improv_serial:
 
