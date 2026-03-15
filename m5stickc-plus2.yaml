@@ -36,7 +36,7 @@ microphone:
     pdm: true
     sample_rate: 22050
     bits_per_sample: 16bit
-    channel: right
+    channel: left
 
 audio_reactive:
   id: audio_analysis
@@ -52,20 +52,33 @@ audio_reactive:
           switch.is_on: mic_mute
         then:
           - output.turn_on: led_red
+          - script.execute:
+              id: show_status
+              state: 1
         else:
           - output.turn_off: led_red
+          - script.execute:
+              id: show_status
+              state: 0
   on_quiet_calibration_started:
-    - output.turn_on: led_red
+    - script.execute:
+        id: show_status
+        state: 2
   on_quiet_calibration_complete:
-    - output.turn_off: led_red
+    - script.execute:
+        id: show_status
+        state: 4
   on_music_calibration_started:
-    - output.turn_on: led_red
+    - script.execute:
+        id: show_status
+        state: 3
   on_music_calibration_complete:
-    - output.turn_off: led_red
+    - script.execute:
+        id: show_status
+        state: 4
 
 # Power hold — GPIO4 must stay HIGH or device powers off
 # Red LED on GPIO19 (simple on/off, shared with IR, not addressable RGB)
-# LCD backlight off — GPIO27, not used for audio-reactive
 output:
   - platform: gpio
     id: power_hold
@@ -73,10 +86,85 @@ output:
   - platform: gpio
     id: led_red
     pin: GPIO19
-  - platform: gpio
-    id: lcd_backlight
-    pin: GPIO27
-    inverted: true
+
+# SPI bus for the ST7789V2 TFT display
+spi:
+  clk_pin: GPIO13
+  mosi_pin: GPIO15
+
+# 1.14" TFT LCD (135x240, ST7789V2) — used for status feedback
+display:
+  - platform: st7789v
+    id: tft_display
+    model: Custom
+    cs_pin: GPIO5
+    dc_pin: GPIO14
+    reset_pin: GPIO12
+    backlight_pin: GPIO27
+    height: 240
+    width: 135
+    offset_height: 40
+    offset_width: 52
+    rotation: 90
+    update_interval: never
+    lambda: |-
+      // Display is updated on-demand by scripts, not continuously
+
+# Global to track display state
+globals:
+  - id: display_state
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+# Display scripts
+script:
+  - id: show_status
+    mode: restart
+    parameters:
+      state: int
+    then:
+      - lambda: |-
+          id(display_state) = state;
+          auto *disp = id(tft_display);
+          disp->fill(Color::BLACK);
+          // 0=off, 1=muted, 2=quiet_cal, 3=music_cal, 4=cal_done
+          switch (state) {
+            case 1:  // Muted
+              disp->filled_rectangle(0, 0, 240, 135, Color(200, 0, 0));
+              disp->printf(120, 50, id(status_font), Color::WHITE, TextAlign::CENTER, "MUTED");
+              break;
+            case 2:  // Quiet calibration
+              disp->filled_rectangle(0, 0, 240, 135, Color(0, 150, 0));
+              disp->printf(120, 35, id(status_font), Color::WHITE, TextAlign::CENTER, "Calibrating");
+              disp->printf(120, 75, id(status_font), Color::WHITE, TextAlign::CENTER, "Quiet Room");
+              break;
+            case 3:  // Music calibration
+              disp->filled_rectangle(0, 0, 240, 135, Color(0, 50, 200));
+              disp->printf(120, 35, id(status_font), Color::WHITE, TextAlign::CENTER, "Calibrating");
+              disp->printf(120, 75, id(status_font), Color::WHITE, TextAlign::CENTER, "Play Music!");
+              break;
+            case 4:  // Done
+              disp->filled_rectangle(0, 0, 240, 135, Color(0, 150, 0));
+              disp->printf(120, 50, id(status_font), Color::WHITE, TextAlign::CENTER, "Done!");
+              break;
+            default:  // Off
+              break;
+          }
+      # Auto-dismiss "Done" after 2s
+      - if:
+          condition:
+            lambda: 'return state == 4;'
+          then:
+            - delay: 2s
+            - script.execute:
+                id: show_status
+                state: 0
+
+font:
+  - file: "gfonts://Roboto"
+    id: status_font
+    size: 28
 
 sensor:
   - platform: audio_reactive
