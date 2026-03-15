@@ -232,6 +232,12 @@ void AudioReactiveComponent::loop() {
 
         publish_zeros_();
 
+        // Reset BPM on silence transition
+        if (silence_result.is_silent && !prev_silence_) {
+            if (bpm_sensor_ != nullptr) bpm_sensor_->publish_state(0.0f);
+            if (onset_det_ != nullptr) onset_det_->reset();
+        }
+
         // Update silence sensor (edge-triggered)
         if (silence_sensor_ != nullptr && silence_result.is_silent != prev_silence_) {
             silence_sensor_->publish_state(silence_result.is_silent);
@@ -316,8 +322,10 @@ void AudioReactiveComponent::set_muted(bool muted) {
         }
         ring_buffer_.clear();
 
-        // Publish zeros for all sensors
+        // Publish zeros for all sensors including BPM
         publish_zeros_();
+        if (bpm_sensor_ != nullptr) bpm_sensor_->publish_state(0.0f);
+        if (onset_det_ != nullptr) onset_det_->reset();
 
         // Set silence on
         if (silence_sensor_ != nullptr) {
