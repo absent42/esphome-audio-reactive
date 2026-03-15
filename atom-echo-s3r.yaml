@@ -70,14 +70,18 @@ audio_reactive:
           - rtttl.play: "unmuted:d=16,o=5,b=200:c4,p,c5"
           - delay: 500ms
           - output.turn_off: speaker_amp_enable
-  on_calibration_started:
+  on_quiet_calibration_started:
     - output.turn_on: speaker_amp_enable
-    - rtttl.play: "cal_start:d=16,o=5,b=200:c5,e5,g5"
+    - rtttl.play: "quiet_start:d=16,o=5,b=200:c5,e5"
+  on_quiet_calibration_complete:
+    - rtttl.play: "quiet_done:d=8,o=5,b=200:e5,g5"
     - delay: 500ms
     - output.turn_off: speaker_amp_enable
-  on_calibration_complete:
+  on_music_calibration_started:
     - output.turn_on: speaker_amp_enable
-    - rtttl.play: "cal_done:d=8,o=5,b=200:g5,c6"
+    - rtttl.play: "music_start:d=16,o=5,b=200:c5,e5,g5"
+  on_music_calibration_complete:
+    - rtttl.play: "music_done:d=8,o=5,b=200:g5,c6"
     - delay: 500ms
     - output.turn_off: speaker_amp_enable
 

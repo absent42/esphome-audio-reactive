@@ -176,8 +176,10 @@ class AudioReactiveComponent : public Component {
 
     // Automation trigger callback registration
     void add_on_mute_changed_callback(std::function<void()> &&callback) { on_mute_changed_callbacks_.add(std::move(callback)); }
-    void add_on_calibration_started_callback(std::function<void()> &&callback) { on_calibration_started_callbacks_.add(std::move(callback)); }
-    void add_on_calibration_complete_callback(std::function<void()> &&callback) { on_calibration_complete_callbacks_.add(std::move(callback)); }
+    void add_on_quiet_calibration_started_callback(std::function<void()> &&callback) { on_quiet_calibration_started_callbacks_.add(std::move(callback)); }
+    void add_on_quiet_calibration_complete_callback(std::function<void()> &&callback) { on_quiet_calibration_complete_callbacks_.add(std::move(callback)); }
+    void add_on_music_calibration_started_callback(std::function<void()> &&callback) { on_music_calibration_started_callbacks_.add(std::move(callback)); }
+    void add_on_music_calibration_complete_callback(std::function<void()> &&callback) { on_music_calibration_complete_callbacks_.add(std::move(callback)); }
     void add_on_silence_changed_callback(std::function<void()> &&callback) { on_silence_changed_callbacks_.add(std::move(callback)); }
 
     friend class AudioReactiveBeatSensitivityNumber;
@@ -280,8 +282,10 @@ class AudioReactiveComponent : public Component {
 
     // Automation trigger callbacks
     CallbackManager<void()> on_mute_changed_callbacks_;
-    CallbackManager<void()> on_calibration_started_callbacks_;
-    CallbackManager<void()> on_calibration_complete_callbacks_;
+    CallbackManager<void()> on_quiet_calibration_started_callbacks_;
+    CallbackManager<void()> on_quiet_calibration_complete_callbacks_;
+    CallbackManager<void()> on_music_calibration_started_callbacks_;
+    CallbackManager<void()> on_music_calibration_complete_callbacks_;
     CallbackManager<void()> on_silence_changed_callbacks_;
 
     /// Publish zero values to all sensors (used when muted or silent).
@@ -305,17 +309,31 @@ class AudioReactiveMuteChangedTrigger : public Trigger<> {
     }
 };
 
-class AudioReactiveCalibrationStartedTrigger : public Trigger<> {
+class AudioReactiveQuietCalibrationStartedTrigger : public Trigger<> {
  public:
-    explicit AudioReactiveCalibrationStartedTrigger(AudioReactiveComponent *parent) {
-        parent->add_on_calibration_started_callback([this]() { this->trigger(); });
+    explicit AudioReactiveQuietCalibrationStartedTrigger(AudioReactiveComponent *parent) {
+        parent->add_on_quiet_calibration_started_callback([this]() { this->trigger(); });
     }
 };
 
-class AudioReactiveCalibrationCompleteTrigger : public Trigger<> {
+class AudioReactiveQuietCalibrationCompleteTrigger : public Trigger<> {
  public:
-    explicit AudioReactiveCalibrationCompleteTrigger(AudioReactiveComponent *parent) {
-        parent->add_on_calibration_complete_callback([this]() { this->trigger(); });
+    explicit AudioReactiveQuietCalibrationCompleteTrigger(AudioReactiveComponent *parent) {
+        parent->add_on_quiet_calibration_complete_callback([this]() { this->trigger(); });
+    }
+};
+
+class AudioReactiveMusicCalibrationStartedTrigger : public Trigger<> {
+ public:
+    explicit AudioReactiveMusicCalibrationStartedTrigger(AudioReactiveComponent *parent) {
+        parent->add_on_music_calibration_started_callback([this]() { this->trigger(); });
+    }
+};
+
+class AudioReactiveMusicCalibrationCompleteTrigger : public Trigger<> {
+ public:
+    explicit AudioReactiveMusicCalibrationCompleteTrigger(AudioReactiveComponent *parent) {
+        parent->add_on_music_calibration_complete_callback([this]() { this->trigger(); });
     }
 };
 

@@ -17,11 +17,17 @@ AudioReactiveComponent = audio_reactive_ns.class_(
 AudioReactiveMuteChangedTrigger = audio_reactive_ns.class_(
     "AudioReactiveMuteChangedTrigger", automation.Trigger.template()
 )
-AudioReactiveCalibrationStartedTrigger = audio_reactive_ns.class_(
-    "AudioReactiveCalibrationStartedTrigger", automation.Trigger.template()
+AudioReactiveQuietCalibrationStartedTrigger = audio_reactive_ns.class_(
+    "AudioReactiveQuietCalibrationStartedTrigger", automation.Trigger.template()
 )
-AudioReactiveCalibrationCompleteTrigger = audio_reactive_ns.class_(
-    "AudioReactiveCalibrationCompleteTrigger", automation.Trigger.template()
+AudioReactiveQuietCalibrationCompleteTrigger = audio_reactive_ns.class_(
+    "AudioReactiveQuietCalibrationCompleteTrigger", automation.Trigger.template()
+)
+AudioReactiveMusicCalibrationStartedTrigger = audio_reactive_ns.class_(
+    "AudioReactiveMusicCalibrationStartedTrigger", automation.Trigger.template()
+)
+AudioReactiveMusicCalibrationCompleteTrigger = audio_reactive_ns.class_(
+    "AudioReactiveMusicCalibrationCompleteTrigger", automation.Trigger.template()
 )
 AudioReactiveSilenceChangedTrigger = audio_reactive_ns.class_(
     "AudioReactiveSilenceChangedTrigger", automation.Trigger.template()
@@ -35,8 +41,10 @@ CONF_SAMPLE_RATE = "sample_rate"
 CONF_FFT_SIZE = "fft_size"
 CONF_DEBUG_LOGGING = "debug_logging"
 CONF_ON_MUTE_CHANGED = "on_mute_changed"
-CONF_ON_CALIBRATION_STARTED = "on_calibration_started"
-CONF_ON_CALIBRATION_COMPLETE = "on_calibration_complete"
+CONF_ON_QUIET_CALIBRATION_STARTED = "on_quiet_calibration_started"
+CONF_ON_QUIET_CALIBRATION_COMPLETE = "on_quiet_calibration_complete"
+CONF_ON_MUSIC_CALIBRATION_STARTED = "on_music_calibration_started"
+CONF_ON_MUSIC_CALIBRATION_COMPLETE = "on_music_calibration_complete"
 CONF_ON_SILENCE_CHANGED = "on_silence_changed"
 
 from esphome.components import microphone
@@ -54,11 +62,17 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_ON_MUTE_CHANGED): automation.validate_automation(
             {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(AudioReactiveMuteChangedTrigger)}
         ),
-        cv.Optional(CONF_ON_CALIBRATION_STARTED): automation.validate_automation(
-            {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(AudioReactiveCalibrationStartedTrigger)}
+        cv.Optional(CONF_ON_QUIET_CALIBRATION_STARTED): automation.validate_automation(
+            {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(AudioReactiveQuietCalibrationStartedTrigger)}
         ),
-        cv.Optional(CONF_ON_CALIBRATION_COMPLETE): automation.validate_automation(
-            {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(AudioReactiveCalibrationCompleteTrigger)}
+        cv.Optional(CONF_ON_QUIET_CALIBRATION_COMPLETE): automation.validate_automation(
+            {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(AudioReactiveQuietCalibrationCompleteTrigger)}
+        ),
+        cv.Optional(CONF_ON_MUSIC_CALIBRATION_STARTED): automation.validate_automation(
+            {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(AudioReactiveMusicCalibrationStartedTrigger)}
+        ),
+        cv.Optional(CONF_ON_MUSIC_CALIBRATION_COMPLETE): automation.validate_automation(
+            {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(AudioReactiveMusicCalibrationCompleteTrigger)}
         ),
         cv.Optional(CONF_ON_SILENCE_CHANGED): automation.validate_automation(
             {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(AudioReactiveSilenceChangedTrigger)}
@@ -85,11 +99,19 @@ async def to_code(config):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
         await automation.build_automation(trigger, [], conf)
 
-    for conf in config.get(CONF_ON_CALIBRATION_STARTED, []):
+    for conf in config.get(CONF_ON_QUIET_CALIBRATION_STARTED, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
         await automation.build_automation(trigger, [], conf)
 
-    for conf in config.get(CONF_ON_CALIBRATION_COMPLETE, []):
+    for conf in config.get(CONF_ON_QUIET_CALIBRATION_COMPLETE, []):
+        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
+        await automation.build_automation(trigger, [], conf)
+
+    for conf in config.get(CONF_ON_MUSIC_CALIBRATION_STARTED, []):
+        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
+        await automation.build_automation(trigger, [], conf)
+
+    for conf in config.get(CONF_ON_MUSIC_CALIBRATION_COMPLETE, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
         await automation.build_automation(trigger, [], conf)
 

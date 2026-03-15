@@ -461,7 +461,7 @@ void AudioReactiveComponent::start_quiet_calibration() {
     cal_max_high_ = 0;
     cal_max_amp_ = 0;
     ESP_LOGI(TAG, "Quiet room calibration started (3 seconds)...");
-    on_calibration_started_callbacks_.call();
+    on_quiet_calibration_started_callbacks_.call();
 }
 
 void AudioReactiveComponent::finish_quiet_calibration() {
@@ -483,7 +483,7 @@ void AudioReactiveComponent::finish_quiet_calibration() {
     ESP_LOGI(TAG, "Quiet calibration done: squelch_threshold=%.2f, noise_floors: bass=%.3f mid=%.3f high=%.3f amp=%.3f",
              cal_store_.squelch_threshold, cal_store_.noise_floor_bass,
              cal_store_.noise_floor_mid, cal_store_.noise_floor_high, cal_store_.noise_floor_amp);
-    on_calibration_complete_callbacks_.call();
+    on_quiet_calibration_complete_callbacks_.call();
 }
 
 void AudioReactiveComponent::start_music_calibration() {
@@ -495,7 +495,7 @@ void AudioReactiveComponent::start_music_calibration() {
     cal_max_high_ = 0;
     cal_sample_count_ = 0;
     ESP_LOGI(TAG, "Music calibration started (5 seconds) — play music at typical volume...");
-    on_calibration_started_callbacks_.call();
+    on_music_calibration_started_callbacks_.call();
 }
 
 void AudioReactiveComponent::finish_music_calibration() {
@@ -512,7 +512,7 @@ void AudioReactiveComponent::finish_music_calibration() {
 
         ESP_LOGI(TAG, "Music calibration done: avg_amp=%.2f, raw_scale=%.4f",
                  avg_amp, cal_store_.raw_scale);
-        on_calibration_complete_callbacks_.call();
+        on_music_calibration_complete_callbacks_.call();
     }
 }
 
