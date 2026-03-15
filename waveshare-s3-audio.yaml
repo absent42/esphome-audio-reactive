@@ -87,6 +87,7 @@ audio_reactive:
   squelch: 10
   sample_rate: 44100
   fft_size: 512
+  debug_logging: true
   on_mute_changed:
     - if:
         condition:
@@ -158,59 +159,33 @@ binary_sensor:
       name: "Audio Sensor"
     silence:
       name: "Silence"
-  # BOOT button (GPIO0) — primary control
-  - platform: gpio
-    pin:
-      number: GPIO0
-      inverted: true
-    name: "Device Button"
-    id: device_button
-    on_multi_click:
-      # Double click: calibrate quiet room
-      - timing:
-          - ON for at most 0.5s
-          - OFF for at most 0.5s
-          - ON for at most 0.5s
-          - OFF for at least 0.3s
-        then:
-          - button.press: calibrate_quiet_btn
-      # Triple click: calibrate music level
-      - timing:
-          - ON for at most 0.5s
-          - OFF for at most 0.5s
-          - ON for at most 0.5s
-          - OFF for at most 0.5s
-          - ON for at most 0.5s
-          - OFF for at least 0.3s
-        then:
-          - button.press: calibrate_music_btn
-      # Long press (>= 1s): toggle mute
-      - timing:
-          - ON for at least 1s
-        then:
-          - switch.toggle: mic_mute
-  # K1-K3 buttons via TCA9555 GPIO expander (available for custom use)
+  # K1: Calibrate quiet room
   - platform: gpio
     pin:
       tca9555: ioexp
       number: 9
       inverted: true
-    name: "Key 1"
-    id: key1
+    name: "Calibrate Quiet (K1)"
+    on_press:
+      - button.press: calibrate_quiet_btn
+  # K2: Calibrate music level
   - platform: gpio
     pin:
       tca9555: ioexp
       number: 10
       inverted: true
-    name: "Key 2"
-    id: key2
+    name: "Calibrate Music (K2)"
+    on_press:
+      - button.press: calibrate_music_btn
+  # K3: Toggle mute
   - platform: gpio
     pin:
       tca9555: ioexp
       number: 11
       inverted: true
-    name: "Key 3"
-    id: key3
+    name: "Toggle Mute (K3)"
+    on_press:
+      - switch.toggle: mic_mute
 
 number:
   - platform: audio_reactive

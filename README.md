@@ -204,11 +204,25 @@ Run quiet room calibration first, then music calibration. If you change rooms, s
 
 ## Button Actions
 
-| Action | ATOM Echo | ATOM Echo S3R | Waveshare |
-|--------|-----------|---------------|-----------|
-| **Double click** | Calibrate quiet (green LED) | Calibrate quiet (speaker tone) | Calibrate quiet (green LEDs) |
-| **Triple click** | Calibrate music (green LED) | Calibrate music (speaker tone) | Calibrate music (green LEDs) |
-| **Long press (1s+)** | Toggle mute (red LED) | Toggle mute (speaker tone) | Toggle mute (red LEDs) |
+### ATOM Echo / ATOM Echo S3R / M5StickC Plus2
+
+These devices have a single button — actions are distinguished by click pattern:
+
+| Action | ATOM Echo | ATOM Echo S3R | M5StickC Plus2 |
+|--------|-----------|---------------|----------------|
+| **Double click** | Calibrate quiet (green LED) | Calibrate quiet (speaker tone) | Calibrate quiet (red LED) |
+| **Triple click** | Calibrate music (blue LED) | Calibrate music (speaker tone) | Calibrate music (red LED) |
+| **Long press (1s+)** | Toggle mute (red LED) | Toggle mute (speaker tone) | Toggle mute (red LED) |
+
+### Waveshare ESP32-S3 Audio Board
+
+The Waveshare has three dedicated buttons (K1, K2, K3) — one action per button:
+
+| Button | Action | Feedback |
+|--------|--------|----------|
+| **K1** | Calibrate quiet room | Green LEDs |
+| **K2** | Calibrate music level | Blue LEDs |
+| **K3** | Toggle mute | Red LEDs |
 
 ## Detection Modes
 
