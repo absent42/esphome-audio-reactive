@@ -50,35 +50,21 @@ audio_dac:
     sample_rate: 44100
     bits_per_sample: 16bit
 
-# Separate I2S buses for mic input and speaker output (shared clock pins)
-# MCLK on input bus — ES7210 needs it to clock the ADC
+# Single I2S bus with MCLK — ES7210 needs MCLK to clock its ADC
 i2s_audio:
-  - id: i2s_input
-    i2s_lrclk_pin:
-      number: GPIO14
-      allow_other_uses: true
-    i2s_bclk_pin:
-      number: GPIO13
-      allow_other_uses: true
-    i2s_mclk_pin: GPIO12
-
-  - id: i2s_output
-    i2s_lrclk_pin:
-      number: GPIO14
-      allow_other_uses: true
-    i2s_bclk_pin:
-      number: GPIO13
-      allow_other_uses: true
+  i2s_lrclk_pin: GPIO14
+  i2s_bclk_pin: GPIO13
+  i2s_mclk_pin: GPIO12
 
 microphone:
   - platform: i2s_audio
     id: mic
-    i2s_audio_id: i2s_input
     adc_type: external
     i2s_din_pin: GPIO15
-    i2s_mode: secondary
     pdm: false
     sample_rate: 44100
+    use_apll: true
+    mclk_multiple: 256
     bits_per_sample: 16bit
     channel: left
 
