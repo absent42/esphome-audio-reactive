@@ -45,6 +45,7 @@ audio_reactive:
   beat_sensitivity: 50
   squelch: 10
   sample_rate: 22050
+  debug_logging: true
   on_mute_changed:
     - if:
         condition:
