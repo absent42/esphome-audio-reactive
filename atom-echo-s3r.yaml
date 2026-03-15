@@ -169,11 +169,11 @@ output:
 
 speaker:
   - platform: i2s_audio
-    id: speaker
+    id: speaker_out
     dac_type: external
     i2s_dout_pin: GPIO48
     sample_rate: 44100
 
 rtttl:
   id: buzzer
-  speaker: speaker
+  speaker: speaker_out
