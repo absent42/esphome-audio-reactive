@@ -49,7 +49,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_BEAT_SENSITIVITY, default=50): cv.int_range(min=1, max=100),
         cv.Optional(CONF_SQUELCH, default=10): cv.int_range(min=0, max=100),
         cv.Optional(CONF_SAMPLE_RATE, default=22050): cv.int_range(min=8000, max=96000),
-        cv.Optional(CONF_FFT_SIZE, default=512): cv.one_of(256, 512, 1024, int=True),
+        cv.Optional(CONF_FFT_SIZE, default=512): cv.one_of(256, 512, int=True),  # 1024 not yet supported (FFTProcessor template constraint)
         cv.Optional(CONF_DEBUG_LOGGING, default=False): cv.boolean,
         cv.Optional(CONF_ON_MUTE_CHANGED): automation.validate_automation(
             {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(AudioReactiveMuteChangedTrigger)}
