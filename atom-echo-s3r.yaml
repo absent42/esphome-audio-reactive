@@ -42,13 +42,18 @@ i2s_audio:
     i2s_bclk_pin:
       number: GPIO17
       allow_other_uses: true
-    i2s_mclk_pin: GPIO11
+    i2s_mclk_pin:
+      number: GPIO11
+      allow_other_uses: true
   - id: i2s_output
     i2s_lrclk_pin:
       number: GPIO3
       allow_other_uses: true
     i2s_bclk_pin:
       number: GPIO17
+      allow_other_uses: true
+    i2s_mclk_pin:
+      number: GPIO11
       allow_other_uses: true
 
 microphone:
