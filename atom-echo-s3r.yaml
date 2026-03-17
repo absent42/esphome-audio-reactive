@@ -88,14 +88,18 @@ audio_reactive:
 script:
   - id: play_done_and_restart_mic
     then:
+      - lambda: ESP_LOGI("s3r", "Stopping mic for speaker tone...");
       - lambda: id(mic).stop();
-      - delay: 100ms
+      - delay: 200ms
+      - lambda: ESP_LOGI("s3r", "Playing done tone...");
       - output.turn_on: speaker_amp_enable
       - rtttl.play: "done:d=8,o=5,b=200:e5,g5"
-      - delay: 800ms
+      - delay: 1500ms
       - output.turn_off: speaker_amp_enable
+      - lambda: ESP_LOGI("s3r", "Restarting mic...");
       - delay: 200ms
       - lambda: id(mic).start();
+      - lambda: ESP_LOGI("s3r", "Mic restarted");
   - id: play_mute_tone
     then:
       - lambda: id(mic).stop();
