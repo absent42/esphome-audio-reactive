@@ -130,7 +130,31 @@ display:
       offset_width: 52
     invert_colors: true
     lambda: |-
-      // Idle: show nothing (black screen). Status updates via show_status script.
+      int state = id(display_state);
+      if (state == 0) {
+        it.fill(Color::BLACK);
+        return;
+      }
+      switch (state) {
+        case 1:  // Muted
+          it.filled_rectangle(0, 0, 240, 135, Color(200, 0, 0));
+          it.printf(120, 50, id(status_font), Color::WHITE, TextAlign::CENTER, "MUTED");
+          break;
+        case 2:  // Quiet calibration
+          it.filled_rectangle(0, 0, 240, 135, Color(0, 150, 0));
+          it.printf(120, 35, id(status_font), Color::WHITE, TextAlign::CENTER, "Calibrating");
+          it.printf(120, 75, id(status_font), Color::WHITE, TextAlign::CENTER, "Quiet Room");
+          break;
+        case 3:  // Music calibration
+          it.filled_rectangle(0, 0, 240, 135, Color(0, 50, 200));
+          it.printf(120, 35, id(status_font), Color::WHITE, TextAlign::CENTER, "Calibrating");
+          it.printf(120, 75, id(status_font), Color::WHITE, TextAlign::CENTER, "Play Music!");
+          break;
+        case 4:  // Done
+          it.filled_rectangle(0, 0, 240, 135, Color(0, 150, 0));
+          it.printf(120, 50, id(status_font), Color::WHITE, TextAlign::CENTER, "Done!");
+          break;
+      }
 
 # Global to track display state
 globals:
@@ -147,32 +171,9 @@ script:
       state: int
     then:
       - lambda: |-
+          ESP_LOGI("display", "show_status: state=%d", state);
           id(display_state) = state;
-          auto *disp = id(tft_display);
-          disp->fill(Color::BLACK);
-          // 0=off, 1=muted, 2=quiet_cal, 3=music_cal, 4=cal_done
-          switch (state) {
-            case 1:  // Muted
-              disp->filled_rectangle(0, 0, 240, 135, Color(200, 0, 0));
-              disp->printf(120, 50, id(status_font), Color::WHITE, TextAlign::CENTER, "MUTED");
-              break;
-            case 2:  // Quiet calibration
-              disp->filled_rectangle(0, 0, 240, 135, Color(0, 150, 0));
-              disp->printf(120, 35, id(status_font), Color::WHITE, TextAlign::CENTER, "Calibrating");
-              disp->printf(120, 75, id(status_font), Color::WHITE, TextAlign::CENTER, "Quiet Room");
-              break;
-            case 3:  // Music calibration
-              disp->filled_rectangle(0, 0, 240, 135, Color(0, 50, 200));
-              disp->printf(120, 35, id(status_font), Color::WHITE, TextAlign::CENTER, "Calibrating");
-              disp->printf(120, 75, id(status_font), Color::WHITE, TextAlign::CENTER, "Play Music!");
-              break;
-            case 4:  // Done
-              disp->filled_rectangle(0, 0, 240, 135, Color(0, 150, 0));
-              disp->printf(120, 50, id(status_font), Color::WHITE, TextAlign::CENTER, "Done!");
-              break;
-            default:  // Off
-              break;
-          }
+      - component.update: tft_display
       # Auto-dismiss "Done" after 2s
       - if:
           condition:
