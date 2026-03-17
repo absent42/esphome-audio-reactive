@@ -28,12 +28,20 @@ class SilenceDetector {
     /// @param raw_amplitude  Raw RMS amplitude from FFT (not normalized — scale varies by mic/gain)
     /// @param timestamp_ms   Monotonic timestamp in milliseconds
     Result update(float raw_amplitude, uint32_t timestamp_ms) {
-        // Map squelch 0-100 to threshold, unless a direct threshold was set by calibration.
+        // Map squelch 0-100 to threshold.
         // Input signal is mid+high energy (not raw amplitude).
         // Quiet room mid+high ≈ 1-4, music ≈ 10-25.
         // At default squelch=10, threshold=5 gates quiet room noise.
         // Scale: squelch=10 → 5, squelch=50 → 25, squelch=100 → 50.
-        float threshold = use_direct_threshold_ ? direct_threshold_ : (squelch_ * 0.5f);
+        float user_threshold = squelch_ * 0.5f;
+
+        // If calibration set a direct threshold, use the LOWER of the two.
+        // This lets the user's squelch slider always override a high calibration
+        // threshold (e.g. ES8311 codec noise produces squelch_thresh ≈ 28, but
+        // user can set squelch=3 → threshold=1.5 to let music through).
+        float threshold = use_direct_threshold_
+            ? std::min(direct_threshold_, user_threshold)
+            : user_threshold;
 
         bool below = raw_amplitude < threshold;
 
@@ -59,6 +67,14 @@ class SilenceDetector {
     }
 
     float squelch() const { return squelch_; }
+
+    /// Return the effective threshold used by the silence gate.
+    float effective_threshold() const {
+        float user_threshold = squelch_ * 0.5f;
+        return use_direct_threshold_
+            ? std::min(direct_threshold_, user_threshold)
+            : user_threshold;
+    }
 
  private:
     float squelch_;
