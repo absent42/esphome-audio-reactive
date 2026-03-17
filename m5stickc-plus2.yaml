@@ -210,44 +210,37 @@ binary_sensor:
       name: "Audio Sensor"
     silence:
       name: "Silence"
-  # Button B (side) — primary control button
+  # Button B (side) — toggle mute
   - platform: gpio
     pin:
       number: GPIO39
       inverted: true
     name: "Device Button"
     id: device_button
-    on_multi_click:
-      # Double click: calibrate quiet room
-      - timing:
-          - ON for at most 0.5s
-          - OFF for at most 0.5s
-          - ON for at most 0.5s
-          - OFF for at least 0.3s
-        then:
-          - button.press: calibrate_quiet_btn
-      # Triple click: calibrate music level
-      - timing:
-          - ON for at most 0.5s
-          - OFF for at most 0.5s
-          - ON for at most 0.5s
-          - OFF for at most 0.5s
-          - ON for at most 0.5s
-          - OFF for at least 0.3s
-        then:
-          - button.press: calibrate_music_btn
-      # Long press (>= 1s): toggle mute
-      - timing:
-          - ON for at least 1s
-        then:
-          - switch.toggle: mic_mute
-  # Button A (front) — exposed for custom use
+    on_press:
+      - switch.toggle: mic_mute
+  # Button A (front) — calibration controls
   - platform: gpio
     pin:
       number: GPIO37
       inverted: true
     name: "Button A"
     id: button_a
+    on_multi_click:
+      # Single click: calibrate quiet room
+      - timing:
+          - ON for at most 0.5s
+          - OFF for at least 0.3s
+        then:
+          - button.press: calibrate_quiet_btn
+      # Double click: calibrate music level
+      - timing:
+          - ON for at most 0.5s
+          - OFF for at most 0.5s
+          - ON for at most 0.5s
+          - OFF for at least 0.3s
+        then:
+          - button.press: calibrate_music_btn
 
 number:
   - platform: audio_reactive
