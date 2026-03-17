@@ -108,16 +108,15 @@ light:
     id: display_bl
     restore_mode: ALWAYS_ON
 
-# SPI bus for the ST7789V2 TFT display (HSPI)
+# SPI bus for the ST7789V2 TFT display
 spi:
-  id: spi_display
   clk_pin: GPIO13
   mosi_pin: GPIO15
-  interface: hardware
 
 # 1.14" TFT LCD (135x240, ST7789V2) — used for status feedback
 display:
   - platform: ili9xxx
+    id: tft_display
     model: st7789v
     cs_pin: GPIO5
     dc_pin: GPIO14
@@ -131,7 +130,7 @@ display:
       offset_width: 52
     invert_colors: true
     lambda: |-
-      // Display is updated on-demand via show_status script
+      // Idle: show nothing (black screen). Status updates via show_status script.
 
 # Global to track display state
 globals:
