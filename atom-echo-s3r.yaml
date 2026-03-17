@@ -80,36 +80,26 @@ audio_reactive:
           - script.execute: play_unmute_tone
   on_quiet_calibration_started: []
   on_quiet_calibration_complete:
-    - lambda: |-
-        ESP_LOGI("s3r", "Calibration done, restarting mic...");
-        id(mic).stop();
-    - delay: 300ms
-    - lambda: |-
-        id(mic).start();
-        ESP_LOGI("s3r", "Mic restarted");
+    - script.execute: play_done_and_restart_mic
   on_music_calibration_started: []
   on_music_calibration_complete:
-    - lambda: |-
-        ESP_LOGI("s3r", "Calibration done, restarting mic...");
-        id(mic).stop();
-    - delay: 300ms
-    - lambda: |-
-        id(mic).start();
-        ESP_LOGI("s3r", "Mic restarted");
+    - script.execute: play_done_and_restart_mic
 
 script:
-  - id: play_done_tone
+  - id: play_done_and_restart_mic
     then:
+      - lambda: id(mic).stop();
+      - delay: 100ms
       - output.turn_on: speaker_amp_enable
       - rtttl.play: "done:d=8,o=5,b=200:e5,g5"
       - delay: 800ms
       - output.turn_off: speaker_amp_enable
       - delay: 200ms
-      - lambda: id(mic).stop();
-      - delay: 100ms
       - lambda: id(mic).start();
   - id: play_mute_tone
     then:
+      - lambda: id(mic).stop();
+      - delay: 100ms
       - output.turn_on: speaker_amp_enable
       - rtttl.play: "muted:d=16,o=5,b=200:c5,p,c4"
       - delay: 800ms
