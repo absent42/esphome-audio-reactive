@@ -118,13 +118,10 @@ spi:
 # 1.14" TFT LCD (135x240, ST7789V2) — used for status feedback
 display:
   - platform: ili9xxx
-    id: tft_display
     model: st7789v
-    spi_id: spi_display
     cs_pin: GPIO5
     dc_pin: GPIO14
     reset_pin: GPIO12
-    data_rate: 40MHz
     rotation: 90
     color_palette: NONE
     dimensions:
@@ -133,7 +130,6 @@ display:
       offset_height: 40
       offset_width: 52
     invert_colors: true
-    update_interval: never
     lambda: |-
       // Display is updated on-demand via show_status script
 
