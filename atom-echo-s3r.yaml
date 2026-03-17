@@ -26,8 +26,8 @@ external_components:
     components: [audio_reactive]
 
 i2c:
-  sda: GPIO0
-  scl: GPIO45
+  sda: GPIO45
+  scl: GPIO0
 
 audio_dac:
   - platform: es8311
