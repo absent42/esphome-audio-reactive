@@ -75,29 +75,43 @@ audio_reactive:
         condition:
           switch.is_on: mic_mute
         then:
-          - output.turn_on: speaker_amp_enable
-          - rtttl.play: "muted:d=16,o=5,b=200:c5,p,c4"
-          - delay: 500ms
-          - output.turn_off: speaker_amp_enable
+          - script.execute: play_mute_tone
         else:
-          - output.turn_on: speaker_amp_enable
-          - rtttl.play: "unmuted:d=16,o=5,b=200:c4,p,c5"
-          - delay: 500ms
-          - output.turn_off: speaker_amp_enable
-  on_quiet_calibration_started:
-    - output.turn_on: speaker_amp_enable
-    - rtttl.play: "quiet_start:d=16,o=5,b=200:c5,e5"
+          - script.execute: play_unmute_tone
+  on_quiet_calibration_started: []
   on_quiet_calibration_complete:
-    - rtttl.play: "quiet_done:d=8,o=5,b=200:e5,g5"
-    - delay: 500ms
-    - output.turn_off: speaker_amp_enable
-  on_music_calibration_started:
-    - output.turn_on: speaker_amp_enable
-    - rtttl.play: "music_start:d=16,o=5,b=200:c5,e5,g5"
+    - script.execute: play_done_tone
+  on_music_calibration_started: []
   on_music_calibration_complete:
-    - rtttl.play: "music_done:d=8,o=5,b=200:g5,c6"
-    - delay: 500ms
-    - output.turn_off: speaker_amp_enable
+    - script.execute: play_done_tone
+
+script:
+  - id: play_done_tone
+    then:
+      - output.turn_on: speaker_amp_enable
+      - rtttl.play: "done:d=8,o=5,b=200:e5,g5"
+      - delay: 800ms
+      - output.turn_off: speaker_amp_enable
+      - delay: 200ms
+      - lambda: id(mic).stop();
+      - delay: 100ms
+      - lambda: id(mic).start();
+  - id: play_mute_tone
+    then:
+      - output.turn_on: speaker_amp_enable
+      - rtttl.play: "muted:d=16,o=5,b=200:c5,p,c4"
+      - delay: 800ms
+      - output.turn_off: speaker_amp_enable
+  - id: play_unmute_tone
+    then:
+      - output.turn_on: speaker_amp_enable
+      - rtttl.play: "unmuted:d=16,o=5,b=200:c4,p,c5"
+      - delay: 800ms
+      - output.turn_off: speaker_amp_enable
+      - delay: 200ms
+      - lambda: id(mic).stop();
+      - delay: 100ms
+      - lambda: id(mic).start();
 
 sensor:
   - platform: audio_reactive
