@@ -41,7 +41,7 @@ Higher-quality audio with an ES8311 codec and speaker feedback for on-device sta
 | **Audio codec** | ES8311 (mic ADC + speaker DAC) |
 | **Feedback** | Speaker tones (no LED) |
 | **Power** | USB-C |
-| **Where to buy** | [M5Stack store](https://shop.m5stack.com/products/atom-echo-s3r), [Pi Hut](https://thepihut.com/products/atom-echos3r-smart-speaker-dev-kit) |
+| **Where to buy** | [M5Stack store](https://shop.m5stack.com/products/atom-echos3r-smart-speaker-dev-kit?variant=46751279710465), [Pi Hut](https://thepihut.com/products/atom-echos3r-smart-speaker-dev-kit) |
 
 ### Waveshare ESP32-S3 Audio Board
 
