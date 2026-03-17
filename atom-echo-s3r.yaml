@@ -80,10 +80,22 @@ audio_reactive:
           - script.execute: play_unmute_tone
   on_quiet_calibration_started: []
   on_quiet_calibration_complete:
-    - script.execute: play_done_tone
+    - lambda: |-
+        ESP_LOGI("s3r", "Calibration done, restarting mic...");
+        id(mic).stop();
+    - delay: 300ms
+    - lambda: |-
+        id(mic).start();
+        ESP_LOGI("s3r", "Mic restarted");
   on_music_calibration_started: []
   on_music_calibration_complete:
-    - script.execute: play_done_tone
+    - lambda: |-
+        ESP_LOGI("s3r", "Calibration done, restarting mic...");
+        id(mic).stop();
+    - delay: 300ms
+    - lambda: |-
+        id(mic).start();
+        ESP_LOGI("s3r", "Mic restarted");
 
 script:
   - id: play_done_tone
