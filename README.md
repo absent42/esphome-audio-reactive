@@ -185,9 +185,9 @@ For best results, calibrate the device to your environment. Calibration data per
 Ensures the device correctly identifies silence and doesn't react to ambient noise.
 
 1. Make sure the room is quiet (no music, minimal background noise)
-2. **Double-click** the device button, or press **Calibrate Quiet Room** in Home Assistant
-3. The LED glows green for 3 seconds while sampling
-4. The LED brightens briefly to confirm calibration is complete
+2. **Double-click** the device button (Button A on M5StickC Plus2), or press **Calibrate Quiet Room** in Home Assistant
+3. The device shows green feedback (LED or screen) for 3 seconds while sampling
+4. Feedback flashes briefly to confirm calibration is complete
 
 This sets the noise gate threshold and per-band noise floors based on your room's actual ambient noise level.
 
@@ -196,9 +196,9 @@ This sets the noise gate threshold and per-band noise floors based on your room'
 Teaches the device what typical music levels look like in your setup, so the sensors produce a useful 0-1 range.
 
 1. Play music at your typical listening volume
-2. **Triple-click** the device button, or press **Calibrate Music Level** in Home Assistant
-3. The LED glows blue for 5 seconds while sampling
-4. The LED brightens briefly to confirm calibration is complete
+2. **Triple-click** the device button (Button A on M5StickC Plus2), or press **Calibrate Music Level** in Home Assistant
+3. The device shows blue feedback (LED or screen) for 5 seconds while sampling
+4. Feedback flashes briefly to confirm calibration is complete
 
 This sets the signal scaling factor so that typical music maps to mid-range sensor values (~0.5), giving the AGC room to normalize both quiet and loud passages.
 
@@ -208,15 +208,25 @@ Run quiet room calibration first, then music calibration. If you change rooms, s
 
 ## Button Actions
 
-### ATOM Echo / ATOM Echo S3R / M5StickC Plus2
+### ATOM Echo / ATOM Echo S3R
 
 These devices have a single button — actions are distinguished by click pattern:
 
-| Action | ATOM Echo | ATOM Echo S3R | M5StickC Plus2 |
-|--------|-----------|---------------|----------------|
-| **Double click** | Calibrate quiet (green LED) | Calibrate quiet (speaker tone) | Calibrate quiet (red LED) |
-| **Triple click** | Calibrate music (blue LED) | Calibrate music (speaker tone) | Calibrate music (red LED) |
-| **Long press (1s+)** | Toggle mute (red LED) | Toggle mute (speaker tone) | Toggle mute (red LED) |
+| Action | ATOM Echo | ATOM Echo S3R |
+|--------|-----------|---------------|
+| **Double click** | Calibrate quiet (green LED) | Calibrate quiet (speaker tone) |
+| **Triple click** | Calibrate music (blue LED) | Calibrate music (speaker tone) |
+| **Long press (1s+)** | Toggle mute (red LED) | Toggle mute (speaker tone) |
+
+### M5StickC Plus2
+
+Button A (front) handles all actions via click pattern. Button B (side) is exposed for custom use.
+
+| Action | Button A | Feedback |
+|--------|----------|----------|
+| **Double click** | Calibrate quiet room | Green screen |
+| **Triple click** | Calibrate music level | Blue screen |
+| **Long press (1s+)** | Toggle mute | Red screen |
 
 ### Waveshare ESP32-S3 Audio Board
 
