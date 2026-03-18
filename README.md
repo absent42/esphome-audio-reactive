@@ -4,9 +4,8 @@ ESP32 audio analysis component for ESPHome. Provides real-time onset/beat detect
 frequency band energy, amplitude, BPM estimation, and silence detection via on-device
 FFT processing with a dedicated FreeRTOS task.
 
-Designed as the audio source for
-[Aqara Advanced Lighting](https://github.com/absent42/aqara-advanced-lighting)
-audio-reactive dynamic scenes, but usable with any Home Assistant automation.
+Designed as the audio source for the 
+[Aqara Advanced Lighting](https://github.com/absent42/aqara-advanced-lighting) Home Assistant integration, enabling music syncing of dynamic lighting scenes. The devices output an array of Home Assistant sensors which can also be used with any automation.
 
 ## Hardware
 
