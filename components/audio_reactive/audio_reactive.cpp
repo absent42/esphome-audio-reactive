@@ -246,7 +246,10 @@ void AudioReactiveComponent::loop() {
         // Reset BPM on silence transition
         if (silence_result.is_silent && !prev_silence_) {
             if (bpm_sensor_ != nullptr) bpm_sensor_->publish_state(0.0f);
+            if (beat_confidence_sensor_ != nullptr) beat_confidence_sensor_->publish_state(0.0f);
+            if (beat_phase_sensor_ != nullptr) beat_phase_sensor_->publish_state(0.0f);
             if (onset_det_ != nullptr) onset_det_->reset();
+            if (beat_tracker_ != nullptr) beat_tracker_->reset();
         }
 
         // Update silence sensor (edge-triggered)
