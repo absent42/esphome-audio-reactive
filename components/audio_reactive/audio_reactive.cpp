@@ -18,6 +18,8 @@ void AudioReactiveComponent::setup() {
     // Allocate DSP pipeline
     fft_ = new FFTProcessor<512>(sample_rate_);  // Template param fixed at 512 for now
     band_agg_ = BandAggregator(sample_rate_, fft_size_);
+    float hop_rate = sample_rate_ / static_cast<float>(hop_size_);
+    whitening_ = SpectralWhitening<256>(hop_rate, 2.0f);
     // AGC instances are stack-allocated with AGC_NORMAL preset
     // Set per-band noise floors calibrated to PDM mic quiet room levels.
     // Values are PRE-SCALED (raw / 20): quiet bass=0.15-2.25, mid=0.04-0.15, high=0.01-0.04
@@ -57,7 +59,7 @@ void AudioReactiveComponent::setup() {
     }
 
     // Create FFT processing task pinned to core 0
-    xTaskCreatePinnedToCore(fft_task_func, "FFT", 4096, this, 1, &fft_task_handle_, 0);
+    xTaskCreatePinnedToCore(fft_task_func, "FFT", 6144, this, 1, &fft_task_handle_, 0);
 
     // Load calibration from flash (NVS)
     cal_pref_ = global_preferences->make_preference<CalibrationStore>(fnv1_hash("audio_cal"));
@@ -102,10 +104,15 @@ void AudioReactiveComponent::fft_task_func(void *param) {
         energies.centroid = spectral_centroid(magnitudes, self->fft_->bin_count(), self->band_agg_.hz_per_bin());
         energies.rolloff = spectral_rolloff(magnitudes, self->fft_->bin_count(), self->band_agg_.hz_per_bin());
 
-        // Complex domain onset: distance between predicted and actual complex values
+        // Whitened magnitudes for onset detection (original magnitudes used for band energies)
+        float whitened_mags[256];
+        size_t bins = self->fft_->bin_count();
+        std::memcpy(whitened_mags, magnitudes, bins * sizeof(float));
+        self->whitening_.process(whitened_mags, bins);
+
+        // Complex domain onset using whitened magnitudes
         float complex_onset = 0.0f;
         const float *phases = self->fft_->phases();
-        size_t bins = self->fft_->bin_count();
 
         if (self->has_prev_frame_) {
             // Phase advance per bin per hop for a stationary sinusoid (Dixon 2006).
@@ -117,17 +124,17 @@ void AudioReactiveComponent::fft_task_func(void *param) {
                 float expected_phase = self->prev_phases_[i] + static_cast<float>(i) * phase_inc;
                 float predicted_re = self->prev_magnitudes_[i] * cosf(expected_phase);
                 float predicted_im = self->prev_magnitudes_[i] * sinf(expected_phase);
-                float actual_re = magnitudes[i] * cosf(phases[i]);
-                float actual_im = magnitudes[i] * sinf(phases[i]);
+                float actual_re = whitened_mags[i] * cosf(phases[i]);
+                float actual_im = whitened_mags[i] * sinf(phases[i]);
                 float d_re = actual_re - predicted_re;
                 float d_im = actual_im - predicted_im;
                 complex_onset += sqrtf(d_re * d_re + d_im * d_im);
             }
         }
 
-        // Store current frame for next iteration
+        // Store whitened frame for next iteration's prediction
         std::memcpy(self->prev_phases_, phases, bins * sizeof(float));
-        std::memcpy(self->prev_magnitudes_, magnitudes, bins * sizeof(float));
+        std::memcpy(self->prev_magnitudes_, whitened_mags, bins * sizeof(float));
         self->has_prev_frame_ = true;
 
         // Store result behind spinlock for main loop
@@ -401,6 +408,7 @@ void AudioReactiveComponent::set_muted(bool muted) {
         }
         ring_buffer_.clear();
         has_prev_frame_ = false;
+        whitening_.reset();
 
         // Publish zeros for all sensors including BPM
         publish_zeros_();
@@ -454,6 +462,7 @@ void AudioReactiveComponent::reset_agc() {
     agc_mid_.reset();
     agc_high_.reset();
     agc_amp_.reset();
+    whitening_.reset();
     if (onset_det_ != nullptr) {
         onset_det_->reset();
     }

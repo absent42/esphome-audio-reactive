@@ -10,6 +10,7 @@
 #include "beat_tracker.h"
 #include "silence_detector.h"
 #include "dynamics_limiter.h"
+#include "spectral_whitening.h"
 
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
@@ -260,6 +261,7 @@ class AudioReactiveComponent : public Component {
     BeatTracker *beat_tracker_{nullptr};
     SilenceDetector silence_det_;
     DynamicsLimiter limiter_;
+    SpectralWhitening<256> whitening_{0.0f};  // Properly initialized in setup()
 
     bool mic_started_{false};
 
