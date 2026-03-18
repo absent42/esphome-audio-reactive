@@ -175,6 +175,35 @@ void test_bass_energy_hysteresis() {
     printf("PASS: test_bass_energy_hysteresis\n");
 }
 
+void test_complex_domain_mode() {
+    OnsetDetector det(50, OnsetDetector::MODE_COMPLEX_DOMAIN);
+    float quiet[16] = {0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f,
+                       0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f};
+    // Warm up with low external values
+    for (int i = 0; i < 60; i++) {
+        det.update(quiet, 0.1f, i * 50, 0.5f);
+    }
+    // Spike in external onset value
+    auto result = det.update(quiet, 0.1f, 3050, 50.0f);
+    assert(result.detected);
+    printf("PASS: test_complex_domain_mode\n");
+}
+
+void test_complex_domain_ignores_bands() {
+    OnsetDetector det(50, OnsetDetector::MODE_COMPLEX_DOMAIN);
+    float quiet[16] = {0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f,
+                       0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f};
+    for (int i = 0; i < 60; i++) {
+        det.update(quiet, 0.1f, i * 50, 0.5f);
+    }
+    // Spike in bands but NOT in external value → should NOT trigger
+    float spike[16] = {0.9f, 0.9f, 0.9f, 0.9f, 0.9f, 0.9f, 0.9f, 0.9f,
+                       0.9f, 0.9f, 0.9f, 0.9f, 0.9f, 0.9f, 0.9f, 0.9f};
+    auto result = det.update(spike, 0.9f, 3050, 0.5f);
+    assert(!result.detected);
+    printf("PASS: test_complex_domain_ignores_bands\n");
+}
+
 int main() {
     test_spectral_flux_detects_onset();
     test_no_onset_in_silence();
@@ -186,6 +215,8 @@ int main() {
     test_reset();
     test_dominant_band_category();
     test_bass_energy_hysteresis();
+    test_complex_domain_mode();
+    test_complex_domain_ignores_bands();
     printf("All onset detector tests passed.\n");
     return 0;
 }

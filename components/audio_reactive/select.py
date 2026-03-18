@@ -13,7 +13,7 @@ AudioReactiveDetectionModeSelect = audio_reactive_ns.class_(
     "AudioReactiveDetectionModeSelect", select.Select, cg.Component
 )
 
-DETECTION_MODE_OPTIONS = ["spectral_flux", "bass_energy"]
+DETECTION_MODE_OPTIONS = ["spectral_flux", "bass_energy", "complex_domain"]
 
 CONFIG_SCHEMA = cv.Schema(
     {

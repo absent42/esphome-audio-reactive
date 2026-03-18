@@ -12,7 +12,7 @@ namespace audio_reactive {
 /// Onset detector supporting spectral flux and bass-energy modes with BPM tracking.
 class OnsetDetector {
  public:
-    enum Mode { MODE_SPECTRAL_FLUX, MODE_BASS_ENERGY };
+    enum Mode { MODE_SPECTRAL_FLUX, MODE_BASS_ENERGY, MODE_COMPLEX_DOMAIN };
     enum OnsetType { TYPE_BEAT, TYPE_ONSET };
 
     struct OnsetResult {
@@ -41,10 +41,12 @@ class OnsetDetector {
     }
 
     /// Process a new frame of band energies.
-    /// @param bands        16-band energy array (0.0-1.0 each)
-    /// @param bass_energy  Normalized bass energy (used in bass-energy mode)
-    /// @param timestamp_ms Monotonic timestamp in milliseconds
-    OnsetResult update(const float bands[16], float bass_energy, uint32_t timestamp_ms) {
+    /// @param bands                16-band energy array (0.0-1.0 each)
+    /// @param bass_energy          Normalized bass energy (used in bass-energy mode)
+    /// @param timestamp_ms         Monotonic timestamp in milliseconds
+    /// @param external_onset_value Pre-computed onset value (used in complex-domain mode); -1 means not provided
+    OnsetResult update(const float bands[16], float bass_energy, uint32_t timestamp_ms,
+                       float external_onset_value = -1.0f) {
         OnsetResult result{false, 0.0f, 0, "bass", TYPE_ONSET};
 
         // Save snapshot of previous bands for dominant-band search below,
@@ -52,9 +54,14 @@ class OnsetDetector {
         float saved_prev[16];
         for (int i = 0; i < 16; i++) saved_prev[i] = prev_bands_[i];
 
-        float value = (mode_ == MODE_SPECTRAL_FLUX)
-                          ? compute_spectral_flux(bands)
-                          : bass_energy;
+        float value;
+        if (mode_ == MODE_COMPLEX_DOMAIN && external_onset_value >= 0.0f) {
+            value = external_onset_value;
+        } else if (mode_ == MODE_SPECTRAL_FLUX) {
+            value = compute_spectral_flux(bands);
+        } else {
+            value = bass_energy;
+        }
         last_value_ = value;
 
         // Update rolling window
@@ -124,6 +131,8 @@ class OnsetDetector {
     }
 
     void set_mode(Mode mode) { mode_ = mode; }
+
+    Mode mode() const { return mode_; }
 
     float last_onset_value() const { return last_value_; }
 

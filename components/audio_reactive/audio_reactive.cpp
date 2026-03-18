@@ -4,6 +4,8 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/preferences.h"
 #include "esphome/core/helpers.h"
+#include <cmath>
+#include <cstring>
 
 namespace esphome {
 namespace audio_reactive {
@@ -100,9 +102,32 @@ void AudioReactiveComponent::fft_task_func(void *param) {
         energies.centroid = spectral_centroid(magnitudes, self->fft_->bin_count(), self->band_agg_.hz_per_bin());
         energies.rolloff = spectral_rolloff(magnitudes, self->fft_->bin_count(), self->band_agg_.hz_per_bin());
 
+        // Complex domain onset: distance between predicted and actual complex values
+        float complex_onset = 0.0f;
+        const float *phases = self->fft_->phases();
+        size_t bins = self->fft_->bin_count();
+
+        if (self->has_prev_frame_) {
+            for (size_t i = 1; i < bins; i++) {
+                float predicted_re = self->prev_magnitudes_[i] * cosf(self->prev_phases_[i]);
+                float predicted_im = self->prev_magnitudes_[i] * sinf(self->prev_phases_[i]);
+                float actual_re = magnitudes[i] * cosf(phases[i]);
+                float actual_im = magnitudes[i] * sinf(phases[i]);
+                float d_re = actual_re - predicted_re;
+                float d_im = actual_im - predicted_im;
+                complex_onset += sqrtf(d_re * d_re + d_im * d_im);
+            }
+        }
+
+        // Store current frame for next iteration
+        std::memcpy(self->prev_phases_, phases, bins * sizeof(float));
+        std::memcpy(self->prev_magnitudes_, magnitudes, bins * sizeof(float));
+        self->has_prev_frame_ = true;
+
         // Store result behind spinlock for main loop
         taskENTER_CRITICAL(&self->fft_mux_);
         self->shared_energies_ = energies;
+        self->shared_complex_onset_ = complex_onset;
         self->new_data_available_ = true;
         taskEXIT_CRITICAL(&self->fft_mux_);
 
@@ -137,10 +162,12 @@ void AudioReactiveComponent::loop() {
 
     // Read latest FFT results from shared struct
     BandEnergies16 energies;
+    float complex_onset = 0.0f;
     bool has_data = false;
     taskENTER_CRITICAL(&fft_mux_);
     if (new_data_available_) {
         energies = shared_energies_;
+        complex_onset = shared_complex_onset_;
         new_data_available_ = false;
         has_data = true;
     }
@@ -300,7 +327,7 @@ void AudioReactiveComponent::loop() {
     for (int i = 0; i < 16; i++) {
         scaled_bands[i] = energies.bands[i] * raw_scale_;
     }
-    auto onset_result = onset_det_->update(scaled_bands, smooth_bass_, now);
+    auto onset_result = onset_det_->update(scaled_bands, smooth_bass_, now, complex_onset);
 
     if (beat_tracker_ != nullptr) {
         beat_tracker_->process(onset_det_->last_onset_value());
@@ -486,6 +513,8 @@ void AudioReactiveDetectionModeSelect::control(const std::string &value) {
         parent_->onset_det_->set_mode(OnsetDetector::MODE_SPECTRAL_FLUX);
     } else if (value == "bass_energy") {
         parent_->onset_det_->set_mode(OnsetDetector::MODE_BASS_ENERGY);
+    } else if (value == "complex_domain") {
+        parent_->onset_det_->set_mode(OnsetDetector::MODE_COMPLEX_DOMAIN);
     }
     this->publish_state(value);
 }

@@ -270,7 +270,13 @@ class AudioReactiveComponent : public Component {
     // Shared data between FFT task (core 0) and main loop (core 1)
     portMUX_TYPE fft_mux_ = portMUX_INITIALIZER_UNLOCKED;
     BandEnergies16 shared_energies_{};
+    float shared_complex_onset_{0.0f};
     bool new_data_available_{false};
+
+    // Complex domain onset: previous-frame state (heap members, not FFT task stack)
+    float prev_phases_[256]{};
+    float prev_magnitudes_[256]{};
+    bool has_prev_frame_{false};
 
     // Smoothed values for asymmetric EMA
     float smooth_bass_{0.0f};
