@@ -1,7 +1,6 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
-#include <cstring>
 
 #include "../../components/audio_reactive/spectral_descriptors.h"
 
