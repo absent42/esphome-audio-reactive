@@ -25,6 +25,8 @@ void AudioReactiveComponent::setup() {
     agc_high_.set_noise_floor(0.03f);  // High is cleanest
     agc_amp_.set_noise_floor(0.10f);   // Overall amplitude
     onset_det_ = new OnsetDetector(beat_sensitivity_);
+    float update_hz = 1000.0f / static_cast<float>(update_interval_ms_);
+    beat_tracker_ = new BeatTracker(update_hz);
     silence_det_ = SilenceDetector(squelch_);
     limiter_ = DynamicsLimiter();
 
@@ -297,6 +299,10 @@ void AudioReactiveComponent::loop() {
     }
     auto onset_result = onset_det_->update(scaled_bands, smooth_bass_, now);
 
+    if (beat_tracker_ != nullptr) {
+        beat_tracker_->process(onset_det_->last_onset_value());
+    }
+
     // Publish sensor values
     if (bass_sensor_ != nullptr) bass_sensor_->publish_state(smooth_bass_);
     if (mid_sensor_ != nullptr) mid_sensor_->publish_state(smooth_mid_);
@@ -321,10 +327,19 @@ void AudioReactiveComponent::loop() {
     }
 
     // Publish BPM periodically
-    if (bpm_sensor_ != nullptr &&
-        (now - last_bpm_publish_ms_) >= BPM_PUBLISH_INTERVAL_MS) {
-        float bpm = onset_det_->current_bpm(now);
-        bpm_sensor_->publish_state(bpm);
+    if ((now - last_bpm_publish_ms_) >= BPM_PUBLISH_INTERVAL_MS) {
+        if (beat_tracker_ != nullptr) {
+            auto bt_result = beat_tracker_->result();
+            if (bpm_sensor_ != nullptr) {
+                bpm_sensor_->publish_state(bt_result.bpm);
+            }
+            if (beat_confidence_sensor_ != nullptr) {
+                beat_confidence_sensor_->publish_state(bt_result.confidence);
+            }
+            if (beat_phase_sensor_ != nullptr) {
+                beat_phase_sensor_->publish_state(bt_result.phase);
+            }
+        }
         last_bpm_publish_ms_ = now;
     }
 }
@@ -404,6 +419,9 @@ void AudioReactiveComponent::reset_agc() {
     agc_amp_.reset();
     if (onset_det_ != nullptr) {
         onset_det_->reset();
+    }
+    if (beat_tracker_ != nullptr) {
+        beat_tracker_->reset();
     }
     limiter_.reset();
     smooth_bass_ = 0.0f;

@@ -55,6 +55,7 @@ class OnsetDetector {
         float value = (mode_ == MODE_SPECTRAL_FLUX)
                           ? compute_spectral_flux(bands)
                           : bass_energy;
+        last_value_ = value;
 
         // Update rolling window
         if (flux_history_.size() >= window_size_) {
@@ -124,6 +125,8 @@ class OnsetDetector {
 
     void set_mode(Mode mode) { mode_ = mode; }
 
+    float last_onset_value() const { return last_value_; }
+
     void reset() {
         flux_history_.clear();
         beat_intervals_.clear();
@@ -173,6 +176,7 @@ class OnsetDetector {
     float multiplier_;
     float prev_bands_[16];
     bool hysteresis_armed_;
+    float last_value_{0.0f};
 
     std::vector<float> flux_history_;
     std::vector<uint32_t> beat_intervals_;

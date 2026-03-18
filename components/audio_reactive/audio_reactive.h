@@ -7,6 +7,7 @@
 #include "band_aggregator.h"
 #include "agc.h"
 #include "onset_detector.h"
+#include "beat_tracker.h"
 #include "silence_detector.h"
 #include "dynamics_limiter.h"
 
@@ -148,6 +149,8 @@ class AudioReactiveComponent : public Component {
     void set_bpm_sensor(sensor::Sensor *s) { bpm_sensor_ = s; }
     void set_centroid_sensor(sensor::Sensor *s) { centroid_sensor_ = s; }
     void set_rolloff_sensor(sensor::Sensor *s) { rolloff_sensor_ = s; }
+    void set_beat_confidence_sensor(sensor::Sensor *s) { beat_confidence_sensor_ = s; }
+    void set_beat_phase_sensor(sensor::Sensor *s) { beat_phase_sensor_ = s; }
 
     // Binary sensor setters
     void set_onset_binary_sensor(binary_sensor::BinarySensor *s) { onset_sensor_ = s; }
@@ -207,6 +210,8 @@ class AudioReactiveComponent : public Component {
     sensor::Sensor *bpm_sensor_{nullptr};
     sensor::Sensor *centroid_sensor_{nullptr};
     sensor::Sensor *rolloff_sensor_{nullptr};
+    sensor::Sensor *beat_confidence_sensor_{nullptr};
+    sensor::Sensor *beat_phase_sensor_{nullptr};
     binary_sensor::BinarySensor *onset_sensor_{nullptr};
     binary_sensor::BinarySensor *silence_sensor_{nullptr};
 
@@ -252,6 +257,7 @@ class AudioReactiveComponent : public Component {
     AGC agc_high_{AGC_NORMAL};
     AGC agc_amp_{AGC_NORMAL};
     OnsetDetector *onset_det_{nullptr};
+    BeatTracker *beat_tracker_{nullptr};
     SilenceDetector silence_det_;
     DynamicsLimiter limiter_;
 
