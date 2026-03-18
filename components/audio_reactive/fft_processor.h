@@ -30,10 +30,9 @@ class FFTProcessor {
         return (bin < bin_count()) ? bin : bin_count() - 1;
     }
 
-    /// Run FFT on input samples and compute magnitudes.
+    /// Run FFT on input samples and compute magnitudes and phases.
     /// Input array must have exactly N elements.
     void process(const float* samples) {
-        // Copy to working buffers
         for (size_t i = 0; i < N; i++) {
             real_[i] = samples[i];
             imag_[i] = 0.0f;
@@ -49,11 +48,18 @@ class FFTProcessor {
                 sum_im -= real_[n] * sinf(angle);
             }
             magnitudes_[k] = sqrtf(sum_re * sum_re + sum_im * sum_im) / N;
+            phases_[k] = atan2f(sum_im, sum_re);
         }
 #else
         ArduinoFFT<float> fft(real_, imag_, N, sample_rate_);
         fft.windowing(FFTWindow::Hamming, FFTDirection::Forward);
         fft.compute(FFTDirection::Forward);
+
+        // Extract phases BEFORE complexToMagnitude destroys complex data
+        for (size_t i = 0; i < N / 2; i++) {
+            phases_[i] = atan2f(imag_[i], real_[i]);
+        }
+
         fft.complexToMagnitude();
         for (size_t i = 0; i < N / 2; i++) {
             magnitudes_[i] = real_[i];
@@ -63,6 +69,9 @@ class FFTProcessor {
 
     /// Pointer to magnitude array (bin_count() elements).
     const float* magnitudes() const { return magnitudes_; }
+
+    /// Pointer to phase array (bin_count() elements, in radians).
+    const float* phases() const { return phases_; }
 
     /// Pink noise correction coefficients (WLED empirical values, 16 entries).
     const float* pink_noise_coefficients() const { return PINK_NOISE_CORRECTION; }
@@ -78,6 +87,7 @@ class FFTProcessor {
     float real_[N]{};
     float imag_[N]{};
     float magnitudes_[N / 2]{};
+    float phases_[N / 2]{};
 };
 
 }  // namespace audio_reactive
