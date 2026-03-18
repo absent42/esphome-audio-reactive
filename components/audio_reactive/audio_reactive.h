@@ -236,6 +236,12 @@ class AudioReactiveComponent : public Component {
     float cal_max_high_{0};
     float cal_max_amp_{0};
     float cal_sum_amp_{0};
+    // Mean accumulators for per-band noise floor (quiet calibration)
+    float cal_sum_bass_{0};
+    float cal_sum_mid_{0};
+    float cal_sum_high_{0};
+    float cal_sum_amp_quiet_{0};
+    uint32_t cal_quiet_count_{0};
     uint32_t cal_sample_count_{0};
     float raw_scale_{1.0f / 20.0f};
 

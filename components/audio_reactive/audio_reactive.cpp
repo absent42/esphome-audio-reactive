@@ -251,6 +251,12 @@ void AudioReactiveComponent::loop() {
             cal_max_mid_ = std::max(cal_max_mid_, energies.mid);
             cal_max_high_ = std::max(cal_max_high_, energies.high);
             cal_max_amp_ = std::max(cal_max_amp_, energies.amplitude);
+            // Accumulate for mean-based noise floors
+            cal_sum_bass_ += energies.bass;
+            cal_sum_mid_ += energies.mid;
+            cal_sum_high_ += energies.high;
+            cal_sum_amp_quiet_ += energies.amplitude;
+            cal_quiet_count_++;
 
             if (elapsed >= 3000) {
                 finish_quiet_calibration();
@@ -545,6 +551,11 @@ void AudioReactiveComponent::start_quiet_calibration() {
     cal_max_mid_ = 0;
     cal_max_high_ = 0;
     cal_max_amp_ = 0;
+    cal_sum_bass_ = 0;
+    cal_sum_mid_ = 0;
+    cal_sum_high_ = 0;
+    cal_sum_amp_quiet_ = 0;
+    cal_quiet_count_ = 0;
     ESP_LOGI(TAG, "Quiet room calibration started (3 seconds)...");
     on_quiet_calibration_started_callbacks_.call();
 }
@@ -555,10 +566,24 @@ void AudioReactiveComponent::finish_quiet_calibration() {
     // Compute thresholds
     cal_store_.squelch_threshold = cal_max_mid_high_ * 1.5f;
     float scale = cal_store_.music_calibrated ? cal_store_.raw_scale : (1.0f / 20.0f);
-    cal_store_.noise_floor_bass = (cal_max_bass_ * scale) * 1.2f;   // 20% headroom
-    cal_store_.noise_floor_mid = (cal_max_mid_ * scale) * 1.2f;
-    cal_store_.noise_floor_high = (cal_max_high_ * scale) * 1.2f;
-    cal_store_.noise_floor_amp = (cal_max_amp_ * scale) * 1.2f;
+    // Use MEAN (not max) for per-band noise floors.
+    // Max captures AC hum spikes which are much higher than actual noise baseline,
+    // causing the AGC to suppress all bass on PDM mics with strong low-frequency noise.
+    if (cal_quiet_count_ > 0) {
+        float mean_bass = cal_sum_bass_ / cal_quiet_count_;
+        float mean_mid = cal_sum_mid_ / cal_quiet_count_;
+        float mean_high = cal_sum_high_ / cal_quiet_count_;
+        float mean_amp = cal_sum_amp_quiet_ / cal_quiet_count_;
+        cal_store_.noise_floor_bass = (mean_bass * scale) * 1.5f;  // 50% headroom above mean
+        cal_store_.noise_floor_mid = (mean_mid * scale) * 1.5f;
+        cal_store_.noise_floor_high = (mean_high * scale) * 1.5f;
+        cal_store_.noise_floor_amp = (mean_amp * scale) * 1.5f;
+    } else {
+        cal_store_.noise_floor_bass = 0.25f;
+        cal_store_.noise_floor_mid = 0.08f;
+        cal_store_.noise_floor_high = 0.03f;
+        cal_store_.noise_floor_amp = 0.10f;
+    }
     cal_store_.quiet_calibrated = true;
 
     // Apply and save
