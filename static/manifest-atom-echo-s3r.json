@@ -1,6 +1,6 @@
 {
     "name": "Audio Reactive Sensor (ATOM Echo S3R)",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "builds": [
         {
             "chipFamily": "ESP32-S3",
