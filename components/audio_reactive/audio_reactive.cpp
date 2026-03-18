@@ -108,9 +108,15 @@ void AudioReactiveComponent::fft_task_func(void *param) {
         size_t bins = self->fft_->bin_count();
 
         if (self->has_prev_frame_) {
+            // Phase advance per bin per hop for a stationary sinusoid (Dixon 2006).
+            // Without this, every stable tone looks like an onset due to phase rotation.
+            float phase_inc = 2.0f * static_cast<float>(M_PI) *
+                              static_cast<float>(self->hop_size_) /
+                              static_cast<float>(self->fft_size_);
             for (size_t i = 1; i < bins; i++) {
-                float predicted_re = self->prev_magnitudes_[i] * cosf(self->prev_phases_[i]);
-                float predicted_im = self->prev_magnitudes_[i] * sinf(self->prev_phases_[i]);
+                float expected_phase = self->prev_phases_[i] + static_cast<float>(i) * phase_inc;
+                float predicted_re = self->prev_magnitudes_[i] * cosf(expected_phase);
+                float predicted_im = self->prev_magnitudes_[i] * sinf(expected_phase);
                 float actual_re = magnitudes[i] * cosf(phases[i]);
                 float actual_im = magnitudes[i] * sinf(phases[i]);
                 float d_re = actual_re - predicted_re;
@@ -394,6 +400,7 @@ void AudioReactiveComponent::set_muted(bool muted) {
             mic_started_ = false;
         }
         ring_buffer_.clear();
+        has_prev_frame_ = false;
 
         // Publish zeros for all sensors including BPM
         publish_zeros_();
