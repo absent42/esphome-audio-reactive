@@ -21,7 +21,6 @@ class BeatTracker {
           write_pos_(0),
           frames_written_(0),
           bp_(0.0f),
-          last_beat_pos_(0.0f),
           confidence_(0.0f),
           phase_(0.0f) {
         // Window: ~4 seconds of history, capped at MAX_WIN
@@ -62,7 +61,6 @@ class BeatTracker {
         if (bp_ > 0.0f && confidence_ > 0.0f) {
             phase_ += 1.0f / bp_;
             if (phase_ >= 1.0f) phase_ -= 1.0f;
-            if (phase_ < 0.0f) phase_ = 0.0f;
         }
     }
 
@@ -78,7 +76,6 @@ class BeatTracker {
         write_pos_ = 0;
         frames_written_ = 0;
         bp_ = 0.0f;
-        last_beat_pos_ = 0.0f;
         confidence_ = 0.0f;
         phase_ = 0.0f;
         std::memset(df_buffer_, 0, sizeof(df_buffer_));
@@ -102,7 +99,6 @@ class BeatTracker {
     float rayleigh_[MAX_LAG];
 
     float bp_;
-    float last_beat_pos_;
     float confidence_;
     float phase_;
 
