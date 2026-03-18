@@ -78,6 +78,8 @@ class BeatTracker {
         bp_ = 0.0f;
         confidence_ = 0.0f;
         phase_ = 0.0f;
+        pending_period_ = 0.0f;
+        tempo_change_count_ = 0;
         std::memset(df_buffer_, 0, sizeof(df_buffer_));
         std::memset(acf_, 0, sizeof(acf_));
         std::memset(acf_out_, 0, sizeof(acf_out_));
@@ -101,6 +103,8 @@ class BeatTracker {
     float bp_;
     float confidence_;
     float phase_;
+    float pending_period_{0.0f};
+    int tempo_change_count_{0};
 
     float df_read_(size_t linear_idx) const {
         // linear_idx 0 = oldest sample
@@ -222,7 +226,33 @@ class BeatTracker {
             }
         }
 
-        bp_ = refined_period;
+        // Temporal smoothing: prevent erratic BPM jumps from harmonic switching.
+        // If the new period is within 20% of the current, blend smoothly.
+        // If it's a large change (>20%), require 3 consecutive consistent readings
+        // before accepting the new tempo.
+        if (bp_ > 0.0f) {
+            float ratio = refined_period / bp_;
+            if (ratio > 0.8f && ratio < 1.2f) {
+                // Small change: smooth blend
+                bp_ = 0.7f * bp_ + 0.3f * refined_period;
+                tempo_change_count_ = 0;
+            } else {
+                // Large change: require consistency
+                if (std::fabs(refined_period - pending_period_) / refined_period < 0.15f) {
+                    tempo_change_count_++;
+                } else {
+                    pending_period_ = refined_period;
+                    tempo_change_count_ = 1;
+                }
+                if (tempo_change_count_ >= 3) {
+                    bp_ = refined_period;
+                    tempo_change_count_ = 0;
+                }
+                // Otherwise keep current bp_
+            }
+        } else {
+            bp_ = refined_period;
+        }
 
         // Confidence = peak / total energy, scaled
         float total = 0.0f;
