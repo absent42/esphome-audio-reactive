@@ -1,4 +1,5 @@
 #include "audio_reactive.h"
+#include "spectral_descriptors.h"
 #include "esphome/core/log.h"
 #include "esphome/core/hal.h"
 #include "esphome/core/preferences.h"
@@ -92,6 +93,10 @@ void AudioReactiveComponent::fft_task_func(void *param) {
 
         // Aggregate into 16 bands
         BandEnergies16 energies = self->band_agg_.aggregate16(magnitudes, self->fft_->bin_count());
+
+        // Compute spectral descriptors
+        energies.centroid = spectral_centroid(magnitudes, self->fft_->bin_count(), self->band_agg_.hz_per_bin());
+        energies.rolloff = spectral_rolloff(magnitudes, self->fft_->bin_count(), self->band_agg_.hz_per_bin());
 
         // Store result behind spinlock for main loop
         taskENTER_CRITICAL(&self->fft_mux_);
@@ -298,6 +303,17 @@ void AudioReactiveComponent::loop() {
     if (high_sensor_ != nullptr) high_sensor_->publish_state(smooth_high_);
     if (amplitude_sensor_ != nullptr) amplitude_sensor_->publish_state(smooth_amp_);
 
+    if (centroid_sensor_ != nullptr) {
+        float nyquist = sample_rate_ / 2.0f;
+        float norm_centroid = (nyquist > 0.0f) ? (energies.centroid / nyquist) : 0.0f;
+        centroid_sensor_->publish_state(norm_centroid);
+    }
+    if (rolloff_sensor_ != nullptr) {
+        float nyquist = sample_rate_ / 2.0f;
+        float norm_rolloff = (nyquist > 0.0f) ? (energies.rolloff / nyquist) : 0.0f;
+        rolloff_sensor_->publish_state(norm_rolloff);
+    }
+
     // Publish onset (pulse on, turned off in loop() after duration)
     if (onset_result.detected && onset_sensor_ != nullptr) {
         onset_sensor_->publish_state(true);
@@ -318,6 +334,8 @@ void AudioReactiveComponent::publish_zeros_() {
     if (mid_sensor_ != nullptr) mid_sensor_->publish_state(0.0f);
     if (high_sensor_ != nullptr) high_sensor_->publish_state(0.0f);
     if (amplitude_sensor_ != nullptr) amplitude_sensor_->publish_state(0.0f);
+    if (centroid_sensor_ != nullptr) centroid_sensor_->publish_state(0.0f);
+    if (rolloff_sensor_ != nullptr) rolloff_sensor_->publish_state(0.0f);
 }
 
 void AudioReactiveComponent::set_muted(bool muted) {

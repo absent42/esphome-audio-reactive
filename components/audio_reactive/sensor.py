@@ -15,6 +15,8 @@ CONF_MID_ENERGY = "mid_energy"
 CONF_HIGH_ENERGY = "high_energy"
 CONF_AMPLITUDE = "amplitude"
 CONF_BPM = "bpm"
+CONF_CENTROID = "centroid"
+CONF_ROLLOFF = "rolloff"
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -45,6 +47,16 @@ CONFIG_SCHEMA = cv.Schema(
             unit_of_measurement="BPM",
             state_class=STATE_CLASS_MEASUREMENT,
         ),
+        cv.Optional(CONF_CENTROID): sensor.sensor_schema(
+            accuracy_decimals=3,
+            icon="mdi:chart-bell-curve",
+            state_class=STATE_CLASS_MEASUREMENT,
+        ),
+        cv.Optional(CONF_ROLLOFF): sensor.sensor_schema(
+            accuracy_decimals=3,
+            icon="mdi:chart-bell-curve-cumulative",
+            state_class=STATE_CLASS_MEASUREMENT,
+        ),
     }
 )
 
@@ -58,6 +70,8 @@ async def to_code(config):
         (CONF_HIGH_ENERGY, "set_high_energy_sensor"),
         (CONF_AMPLITUDE, "set_amplitude_sensor"),
         (CONF_BPM, "set_bpm_sensor"),
+        (CONF_CENTROID, "set_centroid_sensor"),
+        (CONF_ROLLOFF, "set_rolloff_sensor"),
     ]:
         if key in config:
             sens = await sensor.new_sensor(config[key])

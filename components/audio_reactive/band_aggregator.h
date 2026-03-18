@@ -22,6 +22,8 @@ struct BandEnergies16 {
     float mid;        // Summary: RMS of bands 4-9
     float high;       // Summary: RMS of bands 10-15
     float amplitude;  // Overall RMS (all bins except DC)
+    float centroid;   // Spectral centroid in Hz
+    float rolloff;    // Spectral rolloff in Hz (85% energy threshold)
 };
 
 /// 17 frequency boundaries (in Hz) defining 16 bands.
