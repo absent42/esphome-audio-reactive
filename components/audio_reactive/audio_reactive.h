@@ -152,6 +152,7 @@ class AudioReactiveComponent : public Component {
     void set_rolloff_sensor(sensor::Sensor *s) { rolloff_sensor_ = s; }
     void set_beat_confidence_sensor(sensor::Sensor *s) { beat_confidence_sensor_ = s; }
     void set_beat_phase_sensor(sensor::Sensor *s) { beat_phase_sensor_ = s; }
+    void set_onset_strength_sensor(sensor::Sensor *s) { onset_strength_sensor_ = s; }
 
     // Binary sensor setters
     void set_onset_binary_sensor(binary_sensor::BinarySensor *s) { onset_sensor_ = s; }
@@ -213,6 +214,7 @@ class AudioReactiveComponent : public Component {
     sensor::Sensor *rolloff_sensor_{nullptr};
     sensor::Sensor *beat_confidence_sensor_{nullptr};
     sensor::Sensor *beat_phase_sensor_{nullptr};
+    sensor::Sensor *onset_strength_sensor_{nullptr};
     binary_sensor::BinarySensor *onset_sensor_{nullptr};
     binary_sensor::BinarySensor *silence_sensor_{nullptr};
 

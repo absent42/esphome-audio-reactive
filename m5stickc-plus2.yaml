@@ -202,6 +202,16 @@ sensor:
       name: "Amplitude"
     bpm:
       name: "BPM"
+    centroid:
+      name: "Spectral Centroid"
+    rolloff:
+      name: "Spectral Rolloff"
+    beat_confidence:
+      name: "Beat Confidence"
+    beat_phase:
+      name: "Beat Phase"
+    onset_strength:
+      name: "Onset Strength"
 
 binary_sensor:
   - platform: audio_reactive

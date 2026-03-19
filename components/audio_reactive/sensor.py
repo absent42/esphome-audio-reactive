@@ -19,6 +19,7 @@ CONF_CENTROID = "centroid"
 CONF_ROLLOFF = "rolloff"
 CONF_BEAT_CONFIDENCE = "beat_confidence"
 CONF_BEAT_PHASE = "beat_phase"
+CONF_ONSET_STRENGTH = "onset_strength"
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -69,6 +70,11 @@ CONFIG_SCHEMA = cv.Schema(
             icon="mdi:sine-wave",
             state_class=STATE_CLASS_MEASUREMENT,
         ),
+        cv.Optional(CONF_ONSET_STRENGTH): sensor.sensor_schema(
+            accuracy_decimals=3,
+            icon="mdi:flash",
+            state_class=STATE_CLASS_MEASUREMENT,
+        ),
     }
 )
 
@@ -86,6 +92,7 @@ async def to_code(config):
         (CONF_ROLLOFF, "set_rolloff_sensor"),
         (CONF_BEAT_CONFIDENCE, "set_beat_confidence_sensor"),
         (CONF_BEAT_PHASE, "set_beat_phase_sensor"),
+        (CONF_ONSET_STRENGTH, "set_onset_strength_sensor"),
     ]:
         if key in config:
             sens = await sensor.new_sensor(config[key])

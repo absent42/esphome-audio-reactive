@@ -374,6 +374,9 @@ void AudioReactiveComponent::loop() {
         onset_sensor_->publish_state(true);
         onset_on_ms_ = now;
     }
+    if (onset_result.detected && onset_strength_sensor_ != nullptr) {
+        onset_strength_sensor_->publish_state(onset_result.strength);
+    }
 
     // Publish BPM periodically
     if ((now - last_bpm_publish_ms_) >= BPM_PUBLISH_INTERVAL_MS) {
