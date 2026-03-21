@@ -1,8 +1,10 @@
 # ESPHome Audio Reactive
 
 ESP32 audio analysis component for ESPHome. Provides real-time onset/beat detection,
-frequency band energy, amplitude, BPM estimation, and silence detection via on-device
-FFT processing with a dedicated FreeRTOS task.
+frequency band energy, amplitude, BPM estimation with phase tracking, spectral
+descriptors (centroid, rolloff), and silence detection via on-device FFT processing
+with a dedicated FreeRTOS task. Supports three detection modes: spectral flux,
+bass energy, and complex domain (phase + magnitude).
 
 Designed as the audio source for the 
 [Aqara Advanced Lighting](https://github.com/absent42/aqara-advanced-lighting) Home Assistant integration, enabling music syncing of dynamic lighting scenes. The devices output an array of Home Assistant sensors which can also be used with any automation.
@@ -129,10 +131,15 @@ Neither affects the USB web installer.
 | Mid Energy | sensor (0-1) | ~50ms | Smoothed, AGC-normalized mid band energy |
 | High Energy | sensor (0-1) | ~50ms | Smoothed, AGC-normalized high band energy |
 | Amplitude | sensor (0-1) | ~50ms | Overall smoothed amplitude with dynamics limiting |
-| BPM | sensor | ~3s | Estimated beats per minute (with confidence attribute) |
+| BPM | sensor | ~1s | Estimated beats per minute from autocorrelation beat tracker |
+| Beat Confidence | sensor (0-1) | ~1s | Confidence in the current BPM estimate (0 = unknown, 1 = locked) |
+| Beat Phase | sensor (0-1) | ~50ms | Position within the current beat cycle (0 = on beat, approaches 1 before next beat) |
+| Spectral Centroid | sensor (0-1) | ~50ms | Spectral "brightness" — weighted average frequency of the spectrum |
+| Spectral Rolloff | sensor (0-1) | ~50ms | Frequency below which 85% of spectral energy is concentrated |
+| Onset Strength | sensor (0-1) | On event | Magnitude of the most recent onset detection (0 = weak, 1 = strong) |
 | Beat Sensitivity | number (1-100) | On change | Controls onset detection threshold |
 | Squelch | number (0-100) | On change | Noise gate threshold (higher = requires louder signal) |
-| Detection Mode | select | On change | `spectral_flux` (all genres) or `bass_energy` (rhythmic music) |
+| Detection Mode | select | On change | `spectral_flux` (all genres), `bass_energy` (rhythmic), or `complex_domain` (phase+magnitude) |
 | Microphone Mute | switch | On change | Mute/unmute the microphone (LED turns red when muted) |
 | Reset AGC | button | On press | Resets automatic gain control and onset detector |
 | Calibrate Quiet Room | button | On press | Calibrates noise floor from quiet room (3 seconds) |
@@ -141,37 +148,107 @@ Neither affects the USB web installer.
 
 ## Configuration
 
-    audio_reactive:
-      microphone: mic_id          # Required: I2S microphone component ID
-      update_interval: 50ms       # Processing interval (default: 50ms)
-      beat_sensitivity: 50        # 1-100, higher = reacts to quieter onsets (default: 50)
-      squelch: 10                 # 0-100, noise gate threshold (default: 10)
-      sample_rate: 22050          # Sample rate in Hz, must match microphone config (default: 22050)
-      fft_size: 512               # FFT window size: 256, 512, or 1024 (default: 512)
-      debug_logging: false        # Enable comprehensive DSP pipeline logging (default: false)
+```yaml
+audio_reactive:
+  id: audio_analysis
+  microphone: mic                 # Required: I2S microphone component ID
+  update_interval: 50ms           # Processing interval (default: 50ms)
+  beat_sensitivity: 50            # 1-100, higher = reacts to quieter onsets (default: 50)
+  squelch: 10                     # 0-100, noise gate threshold (default: 10)
+  sample_rate: 22050              # Sample rate in Hz, must match microphone config (default: 22050)
+  fft_size: 512                   # FFT window size: 256 or 512 (default: 512)
+  debug_logging: false            # Enable comprehensive DSP pipeline logging (default: false)
 
-## Automation Triggers
+  # Automation triggers (all optional)
+  on_mute_changed:                # Fired when mute state changes (button, switch, or HA)
+    - ...
+  on_quiet_calibration_started:   # Fired when quiet room calibration begins
+    - ...
+  on_quiet_calibration_complete:  # Fired when quiet room calibration finishes
+    - ...
+  on_music_calibration_started:   # Fired when music calibration begins
+    - ...
+  on_music_calibration_complete:  # Fired when music calibration finishes
+    - ...
+  on_silence_changed:             # Fired when silence state transitions
+    - ...
 
-The component fires ESPHome automation triggers for status events, allowing device YAMLs to wire feedback to LEDs, speakers, or other hardware:
+# Sensors (all optional — include only what you need)
+sensor:
+  - platform: audio_reactive
+    audio_reactive_id: audio_analysis
+    bass_energy:
+      name: "Bass Energy"
+    mid_energy:
+      name: "Mid Energy"
+    high_energy:
+      name: "High Energy"
+    amplitude:
+      name: "Amplitude"
+    bpm:
+      name: "BPM"
+    beat_confidence:
+      name: "Beat Confidence"
+    beat_phase:
+      name: "Beat Phase"
+    centroid:
+      name: "Spectral Centroid"
+    rolloff:
+      name: "Spectral Rolloff"
+    onset_strength:
+      name: "Onset Strength"
 
-    audio_reactive:
-      on_mute_changed:        # Fired when mute state changes (button or HA switch)
-        - ...
-      on_calibration_started: # Fired when quiet or music calibration begins
-        - ...
-      on_calibration_complete: # Fired when calibration finishes
-        - ...
-      on_silence_changed:     # Fired when silence state transitions
-        - ...
+# Binary sensors
+binary_sensor:
+  - platform: audio_reactive
+    audio_reactive_id: audio_analysis
+    onset_detected:
+      name: "Audio Sensor"
+    silence:
+      name: "Silence"
 
-See the device YAML files for examples of LED and speaker tone feedback.
+# Control entities
+number:
+  - platform: audio_reactive
+    audio_reactive_id: audio_analysis
+    beat_sensitivity:
+      name: "Beat Sensitivity"
+    squelch:
+      name: "Squelch"
+
+select:
+  - platform: audio_reactive
+    audio_reactive_id: audio_analysis
+    detection_mode:
+      name: "Detection Mode"      # spectral_flux, bass_energy, or complex_domain
+
+switch:
+  - platform: audio_reactive
+    audio_reactive_id: audio_analysis
+    microphone_mute:
+      name: "Microphone Mute"
+
+button:
+  - platform: audio_reactive
+    audio_reactive_id: audio_analysis
+    reset_agc:
+      name: "Reset AGC"
+    calibrate_quiet:
+      name: "Calibrate Quiet Room"
+    calibrate_music:
+      name: "Calibrate Music Level"
+```
+
+See the device YAML files and [example-annotated.yaml](example-annotated.yaml) for complete working examples with feedback wiring.
 
 ## Debug Logging
 
 Enable comprehensive DSP pipeline logging for troubleshooting:
 
-    audio_reactive:
-      debug_logging: true
+```yaml
+audio_reactive:
+  debug_logging: true
+```
 
 When enabled, logs every 2 seconds: raw FFT magnitudes, scaled values, AGC gains, silence state, calibration state, published sensor values, sample rate, FFT size, and ring buffer fill level. Disable for production use.
 

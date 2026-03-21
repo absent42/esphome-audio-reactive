@@ -143,13 +143,13 @@ microphone:
     pdm: true
     sample_rate: 22050
     bits_per_sample: 16bit
-    channel: right
+    channel: right                  # ATOM Echo: right, M5StickC Plus2: left
 
     # I2S codec microphone (ATOM Echo S3R, Waveshare):
     # pdm: false
     # sample_rate: 44100
     # bits_per_sample: 16bit
-    # channel: left                # Waveshare uses left channel
+    # channel: left                 # Waveshare/S3R: left channel
 
 # =============================================================================
 # Audio Reactive Component
@@ -311,6 +311,8 @@ audio_reactive:
 sensor:
   - platform: audio_reactive
     audio_reactive_id: audio_analysis
+
+    # --- Core energy sensors (always recommended) ---
     bass_energy:
       name: "Bass Energy"         # 0.0-1.0, smoothed bass band energy
     mid_energy:
@@ -319,8 +321,28 @@ sensor:
       name: "High Energy"         # 0.0-1.0, smoothed high band energy
     amplitude:
       name: "Amplitude"           # 0.0-1.0, overall smoothed amplitude
+
+    # --- Beat tracking sensors ---
     bpm:
-      name: "BPM"                 # Estimated beats per minute
+      name: "BPM"                 # Estimated beats per minute (autocorrelation tracker)
+    beat_confidence:
+      name: "Beat Confidence"     # 0.0-1.0, how confident the BPM estimate is
+    beat_phase:
+      name: "Beat Phase"          # 0.0-1.0, position in current beat cycle
+                                   # (0 = on beat, approaches 1.0 before next beat)
+
+    # --- Spectral descriptor sensors ---
+    centroid:
+      name: "Spectral Centroid"   # 0.0-1.0, spectral "brightness" (weighted avg frequency)
+                                   # Low = bassy/dark, High = bright/treble-heavy
+    rolloff:
+      name: "Spectral Rolloff"    # 0.0-1.0, frequency below which 85% of energy is concentrated
+                                   # Useful for distinguishing bass-heavy vs balanced music
+
+    # --- Onset sensors ---
+    onset_strength:
+      name: "Onset Strength"      # 0.0-1.0, magnitude of the most recent onset/beat
+                                   # Updated each time onset_detected fires
 
 binary_sensor:
   - platform: audio_reactive
@@ -389,7 +411,8 @@ select:
   - platform: audio_reactive
     audio_reactive_id: audio_analysis
     detection_mode:
-      name: "Detection Mode"      # spectral_flux (all genres) or bass_energy (rhythmic)
+      name: "Detection Mode"      # spectral_flux (all genres), bass_energy (rhythmic),
+                                   # or complex_domain (phase + magnitude, best for soft onsets)
 
 switch:
   - platform: audio_reactive
