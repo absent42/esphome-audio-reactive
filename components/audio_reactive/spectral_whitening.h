@@ -70,7 +70,7 @@ class SpectralWhitening {
     void set_relax_time(float update_rate_hz, float relax_time_s) {
         // decay_ = exp(-1 / (update_rate * relax_time))
         // At decay_ close to 1 peaks decay slowly (long memory).
-        decay_ = std::exp(-1.0f / (update_rate_hz * relax_time_s));
+        decay_ = expf(-1.0f / (update_rate_hz * relax_time_s));
     }
 
  private:

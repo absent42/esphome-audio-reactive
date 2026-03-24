@@ -34,7 +34,7 @@ class BeatTracker {
         float rp = update_rate_hz * 60.0f / 120.0f;
         for (size_t i = 0; i < MAX_LAG; i++) {
             float x = static_cast<float>(i + 1);
-            rayleigh_[i] = (x / (rp * rp)) * std::exp(-0.5f * x * x / (rp * rp));
+            rayleigh_[i] = (x / (rp * rp)) * expf(-0.5f * x * x / (rp * rp));
         }
 
         std::memset(df_buffer_, 0, sizeof(df_buffer_));

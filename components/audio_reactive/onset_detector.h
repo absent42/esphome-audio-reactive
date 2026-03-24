@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <vector>
+#include <cstring>
 
 namespace esphome {
 namespace audio_reactive {
@@ -30,21 +30,23 @@ class OnsetDetector {
     OnsetDetector(int sensitivity = 50, Mode mode = MODE_SPECTRAL_FLUX,
                   size_t window_size = 60, uint32_t min_interval_ms = 150)
         : mode_(mode),
-          window_size_(window_size),
+          window_size_(window_size > MAX_WINDOW ? MAX_WINDOW : window_size),
           min_interval_ms_(min_interval_ms),
           last_onset_ms_(0),
-          hysteresis_armed_(true) {
+          hysteresis_armed_(true),
+          flux_count_(0),
+          flux_head_(0),
+          flux_sum_(0.0f),
+          flux_sq_sum_(0.0f),
+          interval_count_(0),
+          interval_head_(0) {
         set_sensitivity(sensitivity);
         for (int i = 0; i < 16; i++) prev_bands_[i] = 0.0f;
-        flux_history_.reserve(window_size);
-        beat_intervals_.reserve(MAX_INTERVALS);
+        std::memset(flux_ring_, 0, sizeof(flux_ring_));
+        std::memset(interval_ring_, 0, sizeof(interval_ring_));
     }
 
     /// Process a new frame of band energies.
-    /// @param bands                16-band energy array (0.0-1.0 each)
-    /// @param bass_energy          Normalized bass energy (used in bass-energy mode)
-    /// @param timestamp_ms         Monotonic timestamp in milliseconds
-    /// @param external_onset_value Pre-computed onset value (used in complex-domain mode); -1 means not provided
     OnsetResult update(const float bands[16], float bass_energy, uint32_t timestamp_ms,
                        float external_onset_value = -1.0f) {
         OnsetResult result{false, 0.0f, 0, "bass", TYPE_ONSET};
@@ -64,11 +66,18 @@ class OnsetDetector {
         }
         last_value_ = value;
 
-        // Update rolling window
-        if (flux_history_.size() >= window_size_) {
-            flux_history_.erase(flux_history_.begin());
+        // Update rolling window (circular array with incremental stats)
+        if (flux_count_ >= window_size_) {
+            // Evict oldest value from running sums
+            float evicted = flux_ring_[flux_head_];
+            flux_sum_ -= evicted;
+            flux_sq_sum_ -= evicted * evicted;
         }
-        flux_history_.push_back(value);
+        flux_ring_[flux_head_] = value;
+        flux_sum_ += value;
+        flux_sq_sum_ += value * value;
+        flux_head_ = (flux_head_ + 1) % window_size_;
+        if (flux_count_ < window_size_) flux_count_++;
 
         // Update previous bands for next frame's flux computation
         for (int i = 0; i < 16; i++) prev_bands_[i] = bands[i];
@@ -137,8 +146,14 @@ class OnsetDetector {
     float last_onset_value() const { return last_value_; }
 
     void reset() {
-        flux_history_.clear();
-        beat_intervals_.clear();
+        flux_count_ = 0;
+        flux_head_ = 0;
+        flux_sum_ = 0.0f;
+        flux_sq_sum_ = 0.0f;
+        std::memset(flux_ring_, 0, sizeof(flux_ring_));
+        interval_count_ = 0;
+        interval_head_ = 0;
+        std::memset(interval_ring_, 0, sizeof(interval_ring_));
         last_onset_ms_ = 0;
         hysteresis_armed_ = true;
         for (int i = 0; i < 16; i++) prev_bands_[i] = 0.0f;
@@ -147,32 +162,33 @@ class OnsetDetector {
     /// Estimated BPM from recent onset intervals.
     /// Returns 0 if insufficient data or last onset is stale.
     float current_bpm(uint32_t now_ms) const {
-        if (beat_intervals_.size() < 3) return 0.0f;
+        if (interval_count_ < 3) return 0.0f;
         if (last_onset_ms_ > 0 && (now_ms - last_onset_ms_) > BPM_STALE_MS) {
             return 0.0f;
         }
-        std::vector<uint32_t> sorted = beat_intervals_;
-        std::sort(sorted.begin(), sorted.end());
-        uint32_t median = sorted[sorted.size() / 2];
+        // Copy to stack for sorting (small fixed-size array)
+        uint32_t sorted[MAX_INTERVALS];
+        std::memcpy(sorted, interval_ring_, interval_count_ * sizeof(uint32_t));
+        std::sort(sorted, sorted + interval_count_);
+        uint32_t median = sorted[interval_count_ / 2];
         if (median == 0) return 0.0f;
         return 60000.0f / static_cast<float>(median);
     }
 
     /// Confidence 0-100 based on coefficient of variation of intervals.
     int confidence() const {
-        if (beat_intervals_.size() < 3) return 0;
+        if (interval_count_ < 3) return 0;
         float sum = 0.0f;
-        for (uint32_t v : beat_intervals_) sum += static_cast<float>(v);
-        float mean = sum / static_cast<float>(beat_intervals_.size());
+        for (size_t i = 0; i < interval_count_; i++) sum += static_cast<float>(interval_ring_[i]);
+        float mean = sum / static_cast<float>(interval_count_);
         if (mean <= 0.0f) return 0;
         float sq_sum = 0.0f;
-        for (uint32_t v : beat_intervals_) {
-            float d = static_cast<float>(v) - mean;
+        for (size_t i = 0; i < interval_count_; i++) {
+            float d = static_cast<float>(interval_ring_[i]) - mean;
             sq_sum += d * d;
         }
-        float std_dev = std::sqrt(sq_sum / static_cast<float>(beat_intervals_.size()));
-        float cv = std_dev / mean;  // coefficient of variation (0 = perfect, higher = worse)
-        // Map CV to 0-100 confidence (CV=0 → 100, CV>=1 → 0)
+        float std_dev = sqrtf(sq_sum / static_cast<float>(interval_count_));
+        float cv = std_dev / mean;
         int conf = static_cast<int>((1.0f - std::min(1.0f, cv)) * 100.0f);
         return conf;
     }
@@ -187,10 +203,21 @@ class OnsetDetector {
     bool hysteresis_armed_;
     float last_value_{0.0f};
 
-    std::vector<float> flux_history_;
-    std::vector<uint32_t> beat_intervals_;
+    // Circular array replacing std::vector<float> flux_history_
+    static constexpr size_t MAX_WINDOW = 128;
+    float flux_ring_[MAX_WINDOW];
+    size_t flux_count_;
+    size_t flux_head_;
+    // Incremental statistics for O(1) threshold computation
+    float flux_sum_;
+    float flux_sq_sum_;
 
+    // Circular array replacing std::vector<uint32_t> beat_intervals_
     static constexpr size_t MAX_INTERVALS = 16;
+    uint32_t interval_ring_[MAX_INTERVALS];
+    size_t interval_count_;
+    size_t interval_head_;
+
     static constexpr uint32_t BPM_STALE_MS = 5000;
 
     float compute_spectral_flux(const float bands[16]) const {
@@ -204,15 +231,11 @@ class OnsetDetector {
 
     float compute_threshold() const {
         // Require at least half the window before trusting the threshold
-        if (flux_history_.size() < window_size_ / 2) return 1e10f;
-        float sum = 0.0f, sq_sum = 0.0f;
-        for (float v : flux_history_) {
-            sum += v;
-            sq_sum += v * v;
-        }
-        float mean = sum / static_cast<float>(flux_history_.size());
-        float variance = sq_sum / static_cast<float>(flux_history_.size()) - mean * mean;
-        float std_dev = std::sqrt(std::max(0.0f, variance));
+        if (flux_count_ < window_size_ / 2) return 1e10f;
+        float n = static_cast<float>(flux_count_);
+        float mean = flux_sum_ / n;
+        float variance = flux_sq_sum_ / n - mean * mean;
+        float std_dev = sqrtf(std::max(0.0f, variance));
         std_dev = std::max(std_dev, mean * 0.1f);  // floor to avoid near-zero std_dev
         return mean + multiplier_ * std_dev;
     }
@@ -222,21 +245,25 @@ class OnsetDetector {
             uint32_t interval = timestamp_ms - last_onset_ms_;
 
             // Outlier rejection: keep if within 0.5x-2x current median
-            if (beat_intervals_.size() >= 3) {
-                std::vector<uint32_t> sorted = beat_intervals_;
-                std::sort(sorted.begin(), sorted.end());
-                uint32_t median = sorted[sorted.size() / 2];
+            if (interval_count_ >= 3) {
+                uint32_t sorted[MAX_INTERVALS];
+                std::memcpy(sorted, interval_ring_, interval_count_ * sizeof(uint32_t));
+                std::sort(sorted, sorted + interval_count_);
+                uint32_t median = sorted[interval_count_ / 2];
                 if (interval < median / 2 || interval > median * 2) {
-                    // Outlier: skip adding to intervals but still update timestamp
                     last_onset_ms_ = timestamp_ms;
                     return;
                 }
             }
 
-            if (beat_intervals_.size() >= MAX_INTERVALS) {
-                beat_intervals_.erase(beat_intervals_.begin());
+            // Write to circular buffer
+            if (interval_count_ < MAX_INTERVALS) {
+                interval_ring_[interval_count_] = interval;
+                interval_count_++;
+            } else {
+                interval_ring_[interval_head_] = interval;
+                interval_head_ = (interval_head_ + 1) % MAX_INTERVALS;
             }
-            beat_intervals_.push_back(interval);
         }
         last_onset_ms_ = timestamp_ms;
     }

@@ -256,8 +256,8 @@ class AudioReactiveComponent : public Component {
     float sample_rate_{22050.0f};
     bool debug_logging_{false};
 
-    // Ring buffer: 2048 for overlap headroom
-    RingBuffer<float, 2048> ring_buffer_;
+    // Ring buffer: 1024 floats (2x FFT window, sufficient for 512-point FFT + hop)
+    RingBuffer<float, 1024> ring_buffer_;
     FFTProcessor<512> *fft_{nullptr};
 
     // Heap-allocated working buffers for FFT task (avoids stack overflow)
@@ -281,10 +281,14 @@ class AudioReactiveComponent : public Component {
     static void fft_task_func(void *param);
 
     // Shared data between FFT task (core 0) and main loop (core 1)
-    portMUX_TYPE fft_mux_ = portMUX_INITIALIZER_UNLOCKED;
-    BandEnergies16 shared_energies_{};
-    float shared_complex_onset_{0.0f};
-    bool new_data_available_{false};
+    // Double-buffer with atomic index swap eliminates spinlock in hot path.
+    struct SharedFrame {
+        BandEnergies16 energies{};
+        float complex_onset{0.0f};
+    };
+    SharedFrame shared_frames_[2]{};
+    volatile int shared_write_idx_{0};   // FFT task writes to [write ^ 1], then flips
+    volatile bool new_data_available_{false};
 
     // Complex domain onset: previous-frame state (heap members, not FFT task stack)
     float prev_phases_[256]{};

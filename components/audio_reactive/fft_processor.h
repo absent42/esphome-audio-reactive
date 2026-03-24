@@ -16,7 +16,13 @@ template <size_t N>
 class FFTProcessor {
  public:
     explicit FFTProcessor(float sample_rate)
-        : sample_rate_(sample_rate) {}
+        : sample_rate_(sample_rate) {
+        // Pre-compute Hamming window coefficients once at construction.
+        // Avoids recomputing 512 cosines per hop (~88K trig calls/sec at 172 Hz).
+        for (size_t i = 0; i < N; i++) {
+            window_[i] = 0.54f - 0.46f * cosf(2.0f * static_cast<float>(M_PI) * i / (N - 1));
+        }
+    }
 
     /// Number of usable frequency bins (N/2).
     constexpr size_t bin_count() const { return N / 2; }
@@ -33,8 +39,9 @@ class FFTProcessor {
     /// Run FFT on input samples and compute magnitudes and phases.
     /// Input array must have exactly N elements.
     void process(const float* samples) {
+        // Apply pre-computed Hamming window during copy
         for (size_t i = 0; i < N; i++) {
-            real_[i] = samples[i];
+            real_[i] = samples[i] * window_[i];
             imag_[i] = 0.0f;
         }
 
@@ -52,7 +59,7 @@ class FFTProcessor {
         }
 #else
         ArduinoFFT<float> fft(real_, imag_, N, sample_rate_);
-        fft.windowing(FFTWindow::Hamming, FFTDirection::Forward);
+        // Window already applied above — skip fft.windowing()
         fft.compute(FFTDirection::Forward);
 
         // Extract phases BEFORE complexToMagnitude destroys complex data
@@ -82,8 +89,8 @@ class FFTProcessor {
         1.79f, 1.62f, 1.80f, 2.06f, 2.47f, 3.35f, 6.83f, 9.55f
     };
 
-
     float sample_rate_;
+    float window_[N]{};         // Pre-computed Hamming window coefficients
     float real_[N]{};
     float imag_[N]{};
     float magnitudes_[N / 2]{};

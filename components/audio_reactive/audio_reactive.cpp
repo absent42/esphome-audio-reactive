@@ -55,6 +55,10 @@ void AudioReactiveComponent::setup() {
                 ring_buffer_.write(temp, batch);
                 offset += batch;
             }
+            // Wake FFT task when enough samples are available
+            if (ring_buffer_.available() >= FFT_SIZE && fft_task_handle_ != nullptr) {
+                xTaskNotifyGive(fft_task_handle_);
+            }
         });
     } else {
         ESP_LOGW(TAG, "No microphone assigned!");
@@ -85,9 +89,9 @@ void AudioReactiveComponent::fft_task_func(void *param) {
     float *fft_buffer = self->fft_buffer_;
 
     for (;;) {
-        // Wait until we have enough samples for a full FFT frame
+        // Wait until notified that enough samples are available
         if (self->ring_buffer_.available() < FFT_SIZE) {
-            vTaskDelay(pdMS_TO_TICKS(1));
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));  // 100ms timeout as safety fallback
             continue;
         }
 
@@ -148,12 +152,12 @@ void AudioReactiveComponent::fft_task_func(void *param) {
         std::memcpy(self->prev_magnitudes_, whitened_mags, bins * sizeof(float));
         self->has_prev_frame_ = true;
 
-        // Store result behind spinlock for main loop
-        taskENTER_CRITICAL(&self->fft_mux_);
-        self->shared_energies_ = energies;
-        self->shared_complex_onset_ = complex_onset;
+        // Store result via double-buffer (no spinlock needed)
+        int write_slot = self->shared_write_idx_ ^ 1;
+        self->shared_frames_[write_slot].energies = energies;
+        self->shared_frames_[write_slot].complex_onset = complex_onset;
+        self->shared_write_idx_ = write_slot;
         self->new_data_available_ = true;
-        taskEXIT_CRITICAL(&self->fft_mux_);
 
         // Advance by HOP_SIZE (75% overlap)
         self->ring_buffer_.advance(self->HOP_SIZE);
@@ -184,20 +188,12 @@ void AudioReactiveComponent::loop() {
     // Rate limit processing
     if ((now - last_process_ms_) < update_interval_ms_) return;
 
-    // Read latest FFT results from shared struct
-    BandEnergies16 energies;
-    float complex_onset = 0.0f;
-    bool has_data = false;
-    taskENTER_CRITICAL(&fft_mux_);
-    if (new_data_available_) {
-        energies = shared_energies_;
-        complex_onset = shared_complex_onset_;
-        new_data_available_ = false;
-        has_data = true;
-    }
-    taskEXIT_CRITICAL(&fft_mux_);
-
-    if (!has_data) return;
+    // Read latest FFT results from double-buffer (lock-free)
+    if (!new_data_available_) return;
+    new_data_available_ = false;
+    int read_slot = shared_write_idx_;
+    BandEnergies16 energies = shared_frames_[read_slot].energies;
+    float complex_onset = shared_frames_[read_slot].complex_onset;
 
     last_process_ms_ = now;
 
