@@ -27,8 +27,8 @@ class SpectralWhitening {
     explicit SpectralWhitening(float update_rate_hz,
                                 float relax_time_s = 2.0f,
                                 float floor = 1e-4f)
-        : floor_(floor) {
-        set_relax_time(update_rate_hz, relax_time_s);
+        : decay_(expf(-1.0f / (update_rate_hz * relax_time_s))),
+          floor_(floor) {
         reset();
     }
 
@@ -64,13 +64,6 @@ class SpectralWhitening {
         for (size_t i = 0; i < MAX_BINS; i++) {
             peaks_[i] = floor_;
         }
-    }
-
-    /// Update the decay coefficient from a new rate / relax-time pair.
-    void set_relax_time(float update_rate_hz, float relax_time_s) {
-        // decay_ = exp(-1 / (update_rate * relax_time))
-        // At decay_ close to 1 peaks decay slowly (long memory).
-        decay_ = expf(-1.0f / (update_rate_hz * relax_time_s));
     }
 
  private:

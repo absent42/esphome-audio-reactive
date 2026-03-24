@@ -7,14 +7,6 @@
 namespace esphome {
 namespace audio_reactive {
 
-/// Summary band energies published to Home Assistant.
-struct BandEnergies {
-    float bass;       // Raw RMS bass energy (normalized to 0-1 by AGC later)
-    float mid;        // Raw RMS mid energy
-    float high;       // Raw RMS high energy
-    float amplitude;  // Raw RMS overall amplitude
-};
-
 /// Full 16-band internal representation.
 struct BandEnergies16 {
     float bands[16];  // Per-band RMS energy
@@ -105,18 +97,6 @@ class BandAggregator {
             ? rms_energy_exclusive(magnitudes, 1, bin_count)
             : 0.0f;
 
-        return result;
-    }
-
-    /// Aggregate FFT magnitudes into summary 3-band energies (backward compatible).
-    /// Internally calls aggregate16() and extracts the summary values.
-    BandEnergies aggregate(const float* magnitudes, size_t bin_count) const {
-        auto r16 = aggregate16(magnitudes, bin_count);
-        BandEnergies result{};
-        result.bass      = r16.bass;
-        result.mid       = r16.mid;
-        result.high      = r16.high;
-        result.amplitude = r16.amplitude;
         return result;
     }
 

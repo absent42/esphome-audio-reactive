@@ -55,28 +55,11 @@ void test_process_sine_wave() {
     printf("PASS: test_process_sine_wave (peak at bin %zu)\n", peak_bin);
 }
 
-void test_frequency_resolution_22050() {
-    FFTProcessor<512> fft(22050.0f);
-    float res = fft.frequency_resolution();
-    assert(res > 43.0f && res < 43.2f);
-    printf("PASS: test_frequency_resolution_22050\n");
-}
-
-void test_pink_noise_coefficients() {
-    FFTProcessor<512> fft(22050.0f);
-    const float *coeffs = fft.pink_noise_coefficients();
-    assert(coeffs[0] > 1.5f && coeffs[0] < 1.9f);
-    assert(coeffs[15] > 9.0f && coeffs[15] < 10.0f);
-    printf("PASS: test_pink_noise_coefficients\n");
-}
-
 int main() {
     test_bin_count();
     test_frequency_resolution();
     test_bin_for_frequency();
     test_process_sine_wave();
-    test_frequency_resolution_22050();
-    test_pink_noise_coefficients();
     printf("All FFT processor tests passed.\n");
     return 0;
 }

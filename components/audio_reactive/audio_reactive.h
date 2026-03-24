@@ -170,7 +170,6 @@ class AudioReactiveComponent : public Component {
 
     /// Mute/unmute the microphone. Stops audio processing and zeros outputs.
     void set_muted(bool muted);
-    void toggle_mute();
 
     /// Reset AGC and onset detector state for re-calibration.
     void reset_agc();

@@ -468,10 +468,6 @@ void AudioReactiveComponent::set_muted(bool muted) {
     on_mute_changed_callbacks_.call();
 }
 
-void AudioReactiveComponent::toggle_mute() {
-    set_muted(!muted_);
-}
-
 void AudioReactiveComponent::reset_agc() {
     ESP_LOGI(TAG, "Resetting AGC and onset detector");
     agc_bass_.reset();

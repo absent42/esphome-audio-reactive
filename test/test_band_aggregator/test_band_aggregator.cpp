@@ -12,49 +12,6 @@ static bool near(float a, float b, float tol = 1e-4f) {
     return fabsf(a - b) <= tol;
 }
 
-// ── 3-band (legacy) tests ─────────────────────────────────────────────────────
-
-void test_aggregate_bass_only() {
-    // With 43 Hz/bin (22050 Hz / 512 = ~43 Hz), bins 1-10 are sub-bass / bass.
-    // BANDS_16 bands 0-3 cover bins 1-10 → those map to the bass summary.
-    BandAggregator agg;
-    float magnitudes[256] = {};
-    // Energize only bins inside bands 0-3 (bin_start=1, band 3 ends at bin 11 exclusive)
-    for (int i = 1; i <= 10; i++) {
-        magnitudes[i] = 1.0f;
-    }
-    auto result = agg.aggregate(magnitudes, 256);
-    assert(result.bass > 0.0f);
-    assert(result.mid < result.bass);
-    assert(result.high < result.bass);
-    printf("PASS: test_aggregate_bass_only (bass=%.3f mid=%.3f high=%.3f)\n",
-           result.bass, result.mid, result.high);
-}
-
-void test_aggregate_amplitude() {
-    BandAggregator agg;
-    float magnitudes[256] = {};
-    for (int i = 0; i < 256; i++) {
-        magnitudes[i] = 0.5f;
-    }
-    auto result = agg.aggregate(magnitudes, 256);
-    assert(result.amplitude > 0.0f);
-    // RMS of constant 0.5 values = 0.5 exactly
-    assert(near(result.amplitude, 0.5f));
-    printf("PASS: test_aggregate_amplitude (%.3f)\n", result.amplitude);
-}
-
-void test_aggregate_silence() {
-    BandAggregator agg;
-    float magnitudes[256] = {};
-    auto result = agg.aggregate(magnitudes, 256);
-    assert(result.bass == 0.0f);
-    assert(result.mid == 0.0f);
-    assert(result.high == 0.0f);
-    assert(result.amplitude == 0.0f);
-    printf("PASS: test_aggregate_silence\n");
-}
-
 // ── 16-band tests ─────────────────────────────────────────────────────────────
 
 void test_aggregate16_all_zero() {
@@ -150,22 +107,6 @@ void test_aggregate16_amplitude_all_bins() {
     assert(r.amplitude > 0.0f);
     printf("PASS: test_aggregate16_amplitude_all_bins (amp=%.4f band15=%.4f)\n",
            r.amplitude, r.bands[15]);
-}
-
-void test_aggregate16_consistent_with_aggregate() {
-    // aggregate() summary values must match aggregate16() summary values.
-    BandAggregator agg;
-    float magnitudes[256] = {};
-    for (int i = 1; i < 256; i++) magnitudes[i] = static_cast<float>(i % 7) * 0.1f;
-
-    auto r3  = agg.aggregate(magnitudes, 256);
-    auto r16 = agg.aggregate16(magnitudes, 256);
-
-    assert(near(r3.bass,      r16.bass));
-    assert(near(r3.mid,       r16.mid));
-    assert(near(r3.high,      r16.high));
-    assert(near(r3.amplitude, r16.amplitude));
-    printf("PASS: test_aggregate16_consistent_with_aggregate\n");
 }
 
 // ── Dynamic sample rate / FFT size tests ─────────────────────────────────────
@@ -284,18 +225,12 @@ void test_aggregate16_48000hz_1024fft() {
 // ── main ──────────────────────────────────────────────────────────────────────
 
 int main() {
-    // Legacy 3-band tests
-    test_aggregate_bass_only();
-    test_aggregate_amplitude();
-    test_aggregate_silence();
-
     // 16-band tests
     test_aggregate16_all_zero();
     test_aggregate16_band_count();
     test_aggregate16_known_signal();
     test_aggregate16_summary_groupings();
     test_aggregate16_amplitude_all_bins();
-    test_aggregate16_consistent_with_aggregate();
 
     // Dynamic sample rate / FFT size tests
     test_aggregate16_default_matches_22050();
