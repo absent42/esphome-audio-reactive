@@ -76,7 +76,7 @@ audio_reactive:
   squelch: 10
   sample_rate: 44100
   fft_size: 512
-  debug_logging: true
+  debug_logging: false
   on_mute_changed:
     - if:
         condition:
