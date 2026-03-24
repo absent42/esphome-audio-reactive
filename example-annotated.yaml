@@ -168,7 +168,7 @@ audio_reactive:
   sample_rate: 22050              # PDM devices: 22050, codec devices: 44100
 
   # --- FFT size ---
-  # fft_size: 512                 # 256 or 512 (default: 512). 1024 not yet supported.
+  # fft_size: 512                 # Fixed at 512. Other sizes not yet supported.
 
   # --- Debug logging ---
   # debug_logging: true           # Logs raw FFT values, AGC gains, silence state every 2s.

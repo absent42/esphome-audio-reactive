@@ -139,7 +139,6 @@ class AudioReactiveComponent : public Component {
     void set_beat_sensitivity(int sensitivity) { beat_sensitivity_ = sensitivity; }
     void set_squelch(float squelch) { squelch_ = squelch; }
     void set_sample_rate(float rate) { sample_rate_ = rate; }
-    void set_fft_size(uint16_t size) { fft_size_ = size; hop_size_ = size / 4; }
     void set_debug_logging(bool enabled) { debug_logging_ = enabled; }
 
     // Sensor setters (called from sensor.py / binary_sensor.py codegen)
@@ -252,14 +251,18 @@ class AudioReactiveComponent : public Component {
     void apply_calibration();
 
     // DSP pipeline — configurable parameters
-    uint16_t fft_size_{512};
+    static constexpr uint16_t FFT_SIZE = 512;
+    static constexpr uint16_t HOP_SIZE = FFT_SIZE / 4;  // 75% overlap
     float sample_rate_{22050.0f};
-    uint16_t hop_size_{128};  // fft_size / 4 (75% overlap)
     bool debug_logging_{false};
 
-    // Ring buffer: 2048 for overlap headroom (sufficient for fft_size up to 1024)
+    // Ring buffer: 2048 for overlap headroom
     RingBuffer<float, 2048> ring_buffer_;
-    FFTProcessor<512> *fft_{nullptr};  // Template param fixed at 512 for now
+    FFTProcessor<512> *fft_{nullptr};
+
+    // Heap-allocated working buffers for FFT task (avoids stack overflow)
+    float *fft_buffer_{nullptr};       // FFT_SIZE floats
+    float *whitened_mags_{nullptr};    // FFT_SIZE/2 floats
     BandAggregator band_agg_;
     AGC agc_bass_{AGC_NORMAL};
     AGC agc_mid_{AGC_NORMAL};

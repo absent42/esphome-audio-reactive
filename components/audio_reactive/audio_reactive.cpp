@@ -16,9 +16,11 @@ void AudioReactiveComponent::setup() {
     ESP_LOGCONFIG(TAG, "Setting up AudioReactive...");
 
     // Allocate DSP pipeline
-    fft_ = new FFTProcessor<512>(sample_rate_);  // Template param fixed at 512 for now
-    band_agg_ = BandAggregator(sample_rate_, fft_size_);
-    float hop_rate = sample_rate_ / static_cast<float>(hop_size_);
+    fft_ = new FFTProcessor<512>(sample_rate_);
+    fft_buffer_ = new float[FFT_SIZE];
+    whitened_mags_ = new float[FFT_SIZE / 2];
+    band_agg_ = BandAggregator(sample_rate_, FFT_SIZE);
+    float hop_rate = sample_rate_ / static_cast<float>(HOP_SIZE);
     whitening_ = SpectralWhitening<256>(hop_rate, 2.0f);
     // AGC instances are stack-allocated with AGC_NORMAL preset
     // Set per-band noise floors calibrated to PDM mic quiet room levels.
@@ -75,27 +77,36 @@ void AudioReactiveComponent::setup() {
     }
 
     ESP_LOGI(TAG, "Initialized (FFT=%u, rate=%.0f, hop=%u, interval=%ums, sensitivity=%d, squelch=%.0f)",
-             fft_size_, sample_rate_, hop_size_, update_interval_ms_, beat_sensitivity_, squelch_);
+             FFT_SIZE, sample_rate_, HOP_SIZE, update_interval_ms_, beat_sensitivity_, squelch_);
 }
 
 void AudioReactiveComponent::fft_task_func(void *param) {
     auto *self = static_cast<AudioReactiveComponent *>(param);
-    // Stack buffer sized for FFT template (fixed at 512 for now)
-    float fft_buffer[512];
+    float *fft_buffer = self->fft_buffer_;
 
     for (;;) {
         // Wait until we have enough samples for a full FFT frame
-        if (self->ring_buffer_.available() < self->fft_size_) {
+        if (self->ring_buffer_.available() < FFT_SIZE) {
             vTaskDelay(pdMS_TO_TICKS(1));
             continue;
         }
 
-        // Peek fft_size_ samples (don't consume yet — we only advance by hop_size_)
-        self->ring_buffer_.peek(fft_buffer, self->fft_size_);
+        // Peek FFT_SIZE samples (don't consume yet — we only advance by HOP_SIZE)
+        self->ring_buffer_.peek(fft_buffer, FFT_SIZE);
 
         // Process FFT
         self->fft_->process(fft_buffer);
         const float *magnitudes = self->fft_->magnitudes();
+
+        // Guard against NaN from FFT (can occur during mic startup transients)
+        bool has_nan = false;
+        for (size_t i = 0; i < self->fft_->bin_count() && !has_nan; i++) {
+            if (std::isnan(magnitudes[i])) has_nan = true;
+        }
+        if (has_nan) {
+            self->ring_buffer_.advance(HOP_SIZE);
+            continue;
+        }
 
         // Aggregate into 16 bands
         BandEnergies16 energies = self->band_agg_.aggregate16(magnitudes, self->fft_->bin_count());
@@ -105,7 +116,7 @@ void AudioReactiveComponent::fft_task_func(void *param) {
         energies.rolloff = spectral_rolloff(magnitudes, self->fft_->bin_count(), self->band_agg_.hz_per_bin());
 
         // Whitened magnitudes for onset detection (original magnitudes used for band energies)
-        float whitened_mags[256];
+        float *whitened_mags = self->whitened_mags_;
         size_t bins = self->fft_->bin_count();
         std::memcpy(whitened_mags, magnitudes, bins * sizeof(float));
         self->whitening_.process(whitened_mags, bins);
@@ -118,8 +129,8 @@ void AudioReactiveComponent::fft_task_func(void *param) {
             // Phase advance per bin per hop for a stationary sinusoid (Dixon 2006).
             // Without this, every stable tone looks like an onset due to phase rotation.
             float phase_inc = 2.0f * static_cast<float>(M_PI) *
-                              static_cast<float>(self->hop_size_) /
-                              static_cast<float>(self->fft_size_);
+                              static_cast<float>(self->HOP_SIZE) /
+                              static_cast<float>(self->FFT_SIZE);
             for (size_t i = 1; i < bins; i++) {
                 float expected_phase = self->prev_phases_[i] + static_cast<float>(i) * phase_inc;
                 float predicted_re = self->prev_magnitudes_[i] * cosf(expected_phase);
@@ -144,8 +155,8 @@ void AudioReactiveComponent::fft_task_func(void *param) {
         self->new_data_available_ = true;
         taskEXIT_CRITICAL(&self->fft_mux_);
 
-        // Advance by hop_size_ (75% overlap)
-        self->ring_buffer_.advance(self->hop_size_);
+        // Advance by HOP_SIZE (75% overlap)
+        self->ring_buffer_.advance(self->HOP_SIZE);
     }
 }
 
@@ -202,7 +213,7 @@ void AudioReactiveComponent::loop() {
         if (energies.bass > raw_bass_max) raw_bass_max = energies.bass;
 
         if ((now - last_debug_ms) >= 2000) {
-            ESP_LOGI(TAG, "=== AUDIO DEBUG === (sample_rate=%.0f, fft_size=%u)", sample_rate_, fft_size_);
+            ESP_LOGI(TAG, "=== AUDIO DEBUG === (sample_rate=%.0f, fft_size=%u)", sample_rate_, FFT_SIZE);
             ESP_LOGI(TAG, "RAW (current): amp=%.4f bass=%.4f mid=%.4f high=%.4f",
                      energies.amplitude, energies.bass, energies.mid, energies.high);
             ESP_LOGI(TAG, "RAW (2s range): amp=[%.4f..%.4f] bass=[%.4f..%.4f]",
@@ -658,8 +669,8 @@ void AudioReactiveCalibrateMusictButton::press_action() {
 void AudioReactiveComponent::dump_config() {
     ESP_LOGCONFIG(TAG, "AudioReactive:");
     ESP_LOGCONFIG(TAG, "  Sample rate: %.0f Hz", sample_rate_);
-    ESP_LOGCONFIG(TAG, "  FFT size: %u", fft_size_);
-    ESP_LOGCONFIG(TAG, "  Hop size: %u", hop_size_);
+    ESP_LOGCONFIG(TAG, "  FFT size: %u", FFT_SIZE);
+    ESP_LOGCONFIG(TAG, "  Hop size: %u", HOP_SIZE);
     ESP_LOGCONFIG(TAG, "  Debug logging: %s", debug_logging_ ? "yes" : "no");
     ESP_LOGCONFIG(TAG, "  Update interval: %u ms", update_interval_ms_);
     ESP_LOGCONFIG(TAG, "  Beat sensitivity: %d", beat_sensitivity_);
