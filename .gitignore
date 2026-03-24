@@ -4,6 +4,6 @@ build/
 __pycache__/
 .claude/
 .esphome/
-docs/plans/
+docs/
 test/*/test_*
 !test/*/test_*.cpp
