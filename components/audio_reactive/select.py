@@ -4,9 +4,7 @@ import esphome.config_validation as cv
 from esphome.components import select
 from esphome.const import ENTITY_CATEGORY_CONFIG
 
-from . import AudioReactiveComponent, audio_reactive_ns
-
-CONF_AUDIO_REACTIVE_ID = "audio_reactive_id"
+from . import AudioReactiveComponent, audio_reactive_ns, CONF_AUDIO_REACTIVE_ID
 CONF_DETECTION_MODE = "detection_mode"
 
 AudioReactiveDetectionModeSelect = audio_reactive_ns.class_(

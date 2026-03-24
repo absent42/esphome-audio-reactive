@@ -6,11 +6,7 @@
 
 using namespace esphome::audio_reactive;
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-static bool near(float a, float b, float tol = 1e-4f) {
-    return fabsf(a - b) <= tol;
-}
+#include "../test_helpers.h"
 
 // ── 16-band tests ─────────────────────────────────────────────────────────────
 

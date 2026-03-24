@@ -84,17 +84,17 @@ class BandAggregator {
                 continue;
             }
             if (end > bin_count) end = bin_count;
-            result.bands[b] = rms_energy_exclusive(magnitudes, start, end);
+            result.bands[b] = rms_slice(magnitudes, start, end);
         }
 
         // Summary: bass = bands 0-3, mid = bands 4-9, high = bands 10-15
-        result.bass = rms_of_bands(result.bands, 0, 4);
-        result.mid  = rms_of_bands(result.bands, 4, 10);
-        result.high = rms_of_bands(result.bands, 10, 16);
+        result.bass = rms_slice(result.bands, 0, 4);
+        result.mid  = rms_slice(result.bands, 4, 10);
+        result.high = rms_slice(result.bands, 10, 16);
 
         // Amplitude: RMS of all bins except DC (bin 0)
         result.amplitude = (bin_count > 1)
-            ? rms_energy_exclusive(magnitudes, 1, bin_count)
+            ? rms_slice(magnitudes, 1, bin_count)
             : 0.0f;
 
         return result;
@@ -116,22 +116,12 @@ class BandAggregator {
         return static_cast<size_t>(roundf(bin));
     }
 
-    /// RMS energy of bins [start, end) — end is exclusive.
-    static float rms_energy_exclusive(const float* data, size_t start, size_t end) {
+    /// RMS of float array slice [start, end) — used for both FFT bins and band values.
+    static float rms_slice(const float* data, size_t start, size_t end) {
         if (start >= end) return 0.0f;
         float sum = 0.0f;
         for (size_t i = start; i < end; i++) {
             sum += data[i] * data[i];
-        }
-        return sqrtf(sum / static_cast<float>(end - start));
-    }
-
-    /// RMS of a slice of the 16 per-band values [start, end) — end is exclusive.
-    static float rms_of_bands(const float* bands, int start, int end) {
-        if (start >= end) return 0.0f;
-        float sum = 0.0f;
-        for (int i = start; i < end; i++) {
-            sum += bands[i] * bands[i];
         }
         return sqrtf(sum / static_cast<float>(end - start));
     }

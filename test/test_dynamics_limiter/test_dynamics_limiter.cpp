@@ -6,9 +6,7 @@
 
 using namespace esphome::audio_reactive;
 
-static bool approx_eq(float a, float b, float tol = 0.001f) {
-    return std::fabs(a - b) < tol;
-}
+#include "../test_helpers.h"
 
 void test_rise_limited_by_attack() {
     // attack_ms=100 → max_rise = 196 * delta_ms / 100
@@ -33,7 +31,7 @@ void test_fall_limited_by_decay() {
     float out = lim.process(0.0f, 10.0f);
     // Should only fall by max_fall = 196*10/1400 ≈ 1.4
     float expected_fall = 196.0f * 10.0f / 1400.0f;
-    assert(approx_eq(high_val - out, expected_fall, 0.01f));
+    assert(near(high_val - out, expected_fall, 0.01f));
     printf("PASS: test_fall_limited_by_decay (fall=%.2f, expected=%.2f)\n",
            high_val - out, expected_fall);
 }
@@ -44,7 +42,7 @@ void test_eventually_reaches_target_rising() {
     // Process many steps of 10ms with target=50
     for (int i = 0; i < 500; i++) lim.process(target, 10.0f);
     float final_val = lim.last_value();
-    assert(approx_eq(final_val, target, 0.01f));
+    assert(near(final_val, target, 0.01f));
     printf("PASS: test_eventually_reaches_target_rising (final=%.2f)\n", final_val);
 }
 
@@ -55,7 +53,7 @@ void test_eventually_reaches_target_falling() {
     // Now decay to 0
     for (int i = 0; i < 2000; i++) lim.process(0.0f, 10.0f);
     float final_val = lim.last_value();
-    assert(approx_eq(final_val, 0.0f, 0.01f));
+    assert(near(final_val, 0.0f, 0.01f));
     printf("PASS: test_eventually_reaches_target_falling (final=%.2f)\n", final_val);
 }
 
@@ -73,7 +71,7 @@ void test_zero_delta_returns_last_value() {
     lim.process(50.0f, 10.0f);
     float val_before = lim.last_value();
     float out = lim.process(100.0f, 0.0f);
-    assert(approx_eq(out, val_before));
+    assert(near(out, val_before));
     printf("PASS: test_zero_delta_returns_last_value\n");
 }
 
@@ -82,7 +80,7 @@ void test_negative_delta_returns_last_value() {
     lim.process(50.0f, 10.0f);
     float val_before = lim.last_value();
     float out = lim.process(100.0f, -5.0f);
-    assert(approx_eq(out, val_before));
+    assert(near(out, val_before));
     printf("PASS: test_negative_delta_returns_last_value\n");
 }
 

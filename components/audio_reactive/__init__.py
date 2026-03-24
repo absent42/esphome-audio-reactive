@@ -33,6 +33,7 @@ AudioReactiveSilenceChangedTrigger = audio_reactive_ns.class_(
     "AudioReactiveSilenceChangedTrigger", automation.Trigger.template()
 )
 
+CONF_AUDIO_REACTIVE_ID = "audio_reactive_id"
 CONF_MICROPHONE = "microphone"
 CONF_UPDATE_INTERVAL = "update_interval"
 CONF_BEAT_SENSITIVITY = "beat_sensitivity"
@@ -94,26 +95,14 @@ async def to_code(config):
     cg.add(var.set_debug_logging(config[CONF_DEBUG_LOGGING]))
 
     # Automation triggers
-    for conf in config.get(CONF_ON_MUTE_CHANGED, []):
-        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
-        await automation.build_automation(trigger, [], conf)
-
-    for conf in config.get(CONF_ON_QUIET_CALIBRATION_STARTED, []):
-        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
-        await automation.build_automation(trigger, [], conf)
-
-    for conf in config.get(CONF_ON_QUIET_CALIBRATION_COMPLETE, []):
-        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
-        await automation.build_automation(trigger, [], conf)
-
-    for conf in config.get(CONF_ON_MUSIC_CALIBRATION_STARTED, []):
-        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
-        await automation.build_automation(trigger, [], conf)
-
-    for conf in config.get(CONF_ON_MUSIC_CALIBRATION_COMPLETE, []):
-        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
-        await automation.build_automation(trigger, [], conf)
-
-    for conf in config.get(CONF_ON_SILENCE_CHANGED, []):
-        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
-        await automation.build_automation(trigger, [], conf)
+    for trigger_key in [
+        CONF_ON_MUTE_CHANGED,
+        CONF_ON_QUIET_CALIBRATION_STARTED,
+        CONF_ON_QUIET_CALIBRATION_COMPLETE,
+        CONF_ON_MUSIC_CALIBRATION_STARTED,
+        CONF_ON_MUSIC_CALIBRATION_COMPLETE,
+        CONF_ON_SILENCE_CHANGED,
+    ]:
+        for conf in config.get(trigger_key, []):
+            trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
+            await automation.build_automation(trigger, [], conf)

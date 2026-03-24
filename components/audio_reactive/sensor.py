@@ -7,9 +7,7 @@ from esphome.const import (
     STATE_CLASS_MEASUREMENT,
 )
 
-from . import AudioReactiveComponent, audio_reactive_ns
-
-CONF_AUDIO_REACTIVE_ID = "audio_reactive_id"
+from . import AudioReactiveComponent, CONF_AUDIO_REACTIVE_ID
 CONF_BASS_ENERGY = "bass_energy"
 CONF_MID_ENERGY = "mid_energy"
 CONF_HIGH_ENERGY = "high_energy"

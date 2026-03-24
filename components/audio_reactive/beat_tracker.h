@@ -174,15 +174,7 @@ class BeatTracker {
 
         // BPM from comb-filtered period, with range correction
         float bpm = update_rate_ * 60.0f / refined_period;
-        while (bpm > 200.0f && refined_period > 1.0f) {
-            refined_period *= 2.0f;
-            bpm = update_rate_ * 60.0f / refined_period;
-        }
-        while (bpm < 40.0f) {
-            refined_period /= 2.0f;
-            if (refined_period <= 1.0f) break;
-            bpm = update_rate_ * 60.0f / refined_period;
-        }
+        clamp_bpm_range_(bpm, refined_period);
 
         // Sub-harmonic protection: the comb filterbank biased toward 120 BPM may
         // latch onto a harmonic of the true (slower) period. Find the dominant raw
@@ -213,16 +205,7 @@ class BeatTracker {
                 raw_max / comb_acf >= 3.0f) {
                 refined_period = static_cast<float>(raw_max_idx);
                 bpm = update_rate_ * 60.0f / refined_period;
-                // Re-apply BPM range guard
-                while (bpm > 200.0f && refined_period > 1.0f) {
-                    refined_period *= 2.0f;
-                    bpm = update_rate_ * 60.0f / refined_period;
-                }
-                while (bpm < 40.0f) {
-                    refined_period /= 2.0f;
-                    if (refined_period <= 1.0f) break;
-                    bpm = update_rate_ * 60.0f / refined_period;
-                }
+                clamp_bpm_range_(bpm, refined_period);
             }
         }
 
@@ -297,6 +280,19 @@ class BeatTracker {
                           : period_int - ((best_offset - current_linear) % period_int);
         phase_ = static_cast<float>(dist) / static_cast<float>(period_int);
         if (phase_ >= 1.0f) phase_ = 0.0f;
+    }
+
+    /// Clamp BPM into [40, 200] range by octave-shifting the period.
+    void clamp_bpm_range_(float &bpm, float &period) {
+        while (bpm > 200.0f && period > 1.0f) {
+            period *= 2.0f;
+            bpm = update_rate_ * 60.0f / period;
+        }
+        while (bpm < 40.0f) {
+            period /= 2.0f;
+            if (period <= 1.0f) break;
+            bpm = update_rate_ * 60.0f / period;
+        }
     }
 
     float quadratic_peak_pos_(size_t idx) const {

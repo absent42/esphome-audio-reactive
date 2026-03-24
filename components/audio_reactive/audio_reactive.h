@@ -333,48 +333,23 @@ class AudioReactiveComponent : public Component {
     }
 };
 
-// Automation triggers
-class AudioReactiveMuteChangedTrigger : public Trigger<> {
- public:
-    explicit AudioReactiveMuteChangedTrigger(AudioReactiveComponent *parent) {
-        parent->add_on_mute_changed_callback([this]() { this->trigger(); });
-    }
+// Automation triggers (macro-generated — each class is structurally identical)
+#define AUDIO_REACTIVE_TRIGGER(ClassName, callback_method)                   \
+class ClassName : public Trigger<> {                                         \
+ public:                                                                     \
+    explicit ClassName(AudioReactiveComponent *parent) {                     \
+        parent->callback_method([this]() { this->trigger(); });             \
+    }                                                                        \
 };
 
-class AudioReactiveQuietCalibrationStartedTrigger : public Trigger<> {
- public:
-    explicit AudioReactiveQuietCalibrationStartedTrigger(AudioReactiveComponent *parent) {
-        parent->add_on_quiet_calibration_started_callback([this]() { this->trigger(); });
-    }
-};
+AUDIO_REACTIVE_TRIGGER(AudioReactiveMuteChangedTrigger, add_on_mute_changed_callback)
+AUDIO_REACTIVE_TRIGGER(AudioReactiveQuietCalibrationStartedTrigger, add_on_quiet_calibration_started_callback)
+AUDIO_REACTIVE_TRIGGER(AudioReactiveQuietCalibrationCompleteTrigger, add_on_quiet_calibration_complete_callback)
+AUDIO_REACTIVE_TRIGGER(AudioReactiveMusicCalibrationStartedTrigger, add_on_music_calibration_started_callback)
+AUDIO_REACTIVE_TRIGGER(AudioReactiveMusicCalibrationCompleteTrigger, add_on_music_calibration_complete_callback)
+AUDIO_REACTIVE_TRIGGER(AudioReactiveSilenceChangedTrigger, add_on_silence_changed_callback)
 
-class AudioReactiveQuietCalibrationCompleteTrigger : public Trigger<> {
- public:
-    explicit AudioReactiveQuietCalibrationCompleteTrigger(AudioReactiveComponent *parent) {
-        parent->add_on_quiet_calibration_complete_callback([this]() { this->trigger(); });
-    }
-};
-
-class AudioReactiveMusicCalibrationStartedTrigger : public Trigger<> {
- public:
-    explicit AudioReactiveMusicCalibrationStartedTrigger(AudioReactiveComponent *parent) {
-        parent->add_on_music_calibration_started_callback([this]() { this->trigger(); });
-    }
-};
-
-class AudioReactiveMusicCalibrationCompleteTrigger : public Trigger<> {
- public:
-    explicit AudioReactiveMusicCalibrationCompleteTrigger(AudioReactiveComponent *parent) {
-        parent->add_on_music_calibration_complete_callback([this]() { this->trigger(); });
-    }
-};
-
-class AudioReactiveSilenceChangedTrigger : public Trigger<> {
- public:
-    explicit AudioReactiveSilenceChangedTrigger(AudioReactiveComponent *parent) {
-        parent->add_on_silence_changed_callback([this]() { this->trigger(); });
-    }
-};
+#undef AUDIO_REACTIVE_TRIGGER
 
 }  // namespace audio_reactive
 }  // namespace esphome
