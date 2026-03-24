@@ -12,8 +12,8 @@ namespace audio_reactive {
 /// scale used by the AGC output (0-196 raw range before normalization).
 class DynamicsLimiter {
  public:
-    /// @param attack_ms  Time (ms) to rise 196 units (fast follow on signal increase)
-    /// @param decay_ms   Time (ms) to fall 196 units (slow follow on signal decrease)
+    /// @param attack_ms  Time (ms) to rise full range (fast follow on signal increase)
+    /// @param decay_ms   Time (ms) to fall full range (slow follow on signal decrease)
     DynamicsLimiter(float attack_ms = 80.0f, float decay_ms = 1400.0f)
         : attack_ms_(attack_ms), decay_ms_(decay_ms), last_value_(0.0f) {}
 
@@ -23,8 +23,10 @@ class DynamicsLimiter {
     float process(float value, float delta_ms) {
         if (delta_ms <= 0.0f) return last_value_;
 
-        float max_rise = 196.0f * delta_ms / attack_ms_;
-        float max_fall = 196.0f * delta_ms / decay_ms_;
+        // WLED_RANGE: legacy scale factor from WLED (0-196 raw range before normalization)
+        static constexpr float WLED_RANGE = 196.0f;
+        float max_rise = WLED_RANGE * delta_ms / attack_ms_;
+        float max_fall = WLED_RANGE * delta_ms / decay_ms_;
 
         if (value > last_value_) {
             // Attack: limit rise rate

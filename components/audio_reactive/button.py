@@ -15,8 +15,8 @@ AudioReactiveResetAGCButton = audio_reactive_ns.class_(
 AudioReactiveCalibrateQuietButton = audio_reactive_ns.class_(
     "AudioReactiveCalibrateQuietButton", button.Button, cg.Component
 )
-AudioReactiveCalibrateMusictButton = audio_reactive_ns.class_(
-    "AudioReactiveCalibrateMusictButton", button.Button, cg.Component
+AudioReactiveCalibrateMusicButton = audio_reactive_ns.class_(
+    "AudioReactiveCalibrateMusicButton", button.Button, cg.Component
 )
 
 CONFIG_SCHEMA = cv.Schema(
@@ -33,7 +33,7 @@ CONFIG_SCHEMA = cv.Schema(
             entity_category=ENTITY_CATEGORY_CONFIG,
         ),
         cv.Optional(CONF_CALIBRATE_MUSIC): button.button_schema(
-            AudioReactiveCalibrateMusictButton,
+            AudioReactiveCalibrateMusicButton,
             icon="mdi:music-note-plus",
             entity_category=ENTITY_CATEGORY_CONFIG,
         ),

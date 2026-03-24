@@ -182,10 +182,7 @@ void AudioReactiveComponent::loop() {
         onset_on_ms_ = 0;
     }
 
-    // If muted, skip processing
     if (muted_) return;
-
-    // Rate limit processing
     if ((now - last_process_ms_) < update_interval_ms_) return;
 
     // Read latest FFT results from double-buffer (lock-free)
@@ -197,106 +194,20 @@ void AudioReactiveComponent::loop() {
 
     last_process_ms_ = now;
 
-    // Debug: comprehensive logging every 2 seconds (gated by debug_logging_)
-    if (debug_logging_) {
-        static uint32_t last_debug_ms = 0;
-        static float raw_amp_min = 1e10f, raw_amp_max = 0.0f;
-        static float raw_bass_min = 1e10f, raw_bass_max = 0.0f;
-        // Track min/max of raw values between log intervals
-        if (energies.amplitude < raw_amp_min) raw_amp_min = energies.amplitude;
-        if (energies.amplitude > raw_amp_max) raw_amp_max = energies.amplitude;
-        if (energies.bass < raw_bass_min) raw_bass_min = energies.bass;
-        if (energies.bass > raw_bass_max) raw_bass_max = energies.bass;
+    if (debug_logging_) process_debug_logging_(now, energies);
+    accumulate_calibration_(now, energies);
 
-        if ((now - last_debug_ms) >= 2000) {
-            ESP_LOGI(TAG, "=== AUDIO DEBUG === (sample_rate=%.0f, fft_size=%u)", sample_rate_, FFT_SIZE);
-            ESP_LOGI(TAG, "RAW (current): amp=%.4f bass=%.4f mid=%.4f high=%.4f",
-                     energies.amplitude, energies.bass, energies.mid, energies.high);
-            ESP_LOGI(TAG, "RAW (2s range): amp=[%.4f..%.4f] bass=[%.4f..%.4f]",
-                     raw_amp_min, raw_amp_max, raw_bass_min, raw_bass_max);
-            ESP_LOGI(TAG, "RAW bands: [%.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f]",
-                     energies.bands[0], energies.bands[1], energies.bands[2], energies.bands[3],
-                     energies.bands[4], energies.bands[5], energies.bands[6], energies.bands[7],
-                     energies.bands[8], energies.bands[9], energies.bands[10], energies.bands[11],
-                     energies.bands[12], energies.bands[13], energies.bands[14], energies.bands[15]);
-            ESP_LOGI(TAG, "SCALED: bass=%.3f mid=%.3f high=%.3f amp=%.3f (raw_scale=%.4f)",
-                     energies.bass * raw_scale_, energies.mid * raw_scale_,
-                     energies.high * raw_scale_, energies.amplitude * raw_scale_, raw_scale_);
-            ESP_LOGI(TAG, "AGC gains: bass=%.2f mid=%.2f high=%.2f amp=%.2f",
-                     agc_bass_.current_gain(), agc_mid_.current_gain(),
-                     agc_high_.current_gain(), agc_amp_.current_gain());
-            float dbg_silence_signal = energies.mid + energies.high;
-            ESP_LOGI(TAG, "Silence signal (mid+high)=%.2f | Squelch=%.1f (user_thresh=%.2f, eff_thresh=%.2f, cal_thresh=%.2f)",
-                     dbg_silence_signal, silence_det_.squelch(), silence_det_.squelch() * 0.5f,
-                     silence_det_.effective_threshold(), cal_store_.squelch_threshold);
-            ESP_LOGI(TAG, "Silence state: prev_silence=%d", prev_silence_);
-            ESP_LOGI(TAG, "Calibration: quiet=%s music=%s scale=%.4f squelch_thresh=%.2f",
-                     cal_store_.quiet_calibrated ? "yes" : "no",
-                     cal_store_.music_calibrated ? "yes" : "no",
-                     cal_store_.raw_scale, cal_store_.squelch_threshold);
-            ESP_LOGI(TAG, "Published: bass=%.3f mid=%.3f high=%.3f amp=%.3f",
-                     smooth_bass_, smooth_mid_, smooth_high_, smooth_amp_);
-            ESP_LOGI(TAG, "Ring buffer: %u/%u samples",
-                     static_cast<unsigned>(ring_buffer_.available()),
-                     static_cast<unsigned>(ring_buffer_.capacity()));
-            // Reset min/max trackers
-            raw_amp_min = 1e10f; raw_amp_max = 0.0f;
-            raw_bass_min = 1e10f; raw_bass_max = 0.0f;
-            last_debug_ms = now;
-        }
-    }
-
-    // Calibration accumulation — runs BEFORE silence gate so quiet room
-    // calibration can sample even during "silence"
-    if (cal_state_ != CAL_IDLE) {
-        uint32_t elapsed = now - cal_start_ms_;
-
-        if (cal_state_ == CAL_QUIET) {
-            float mid_high = energies.mid + energies.high;
-            cal_max_mid_high_ = std::max(cal_max_mid_high_, mid_high);
-            cal_max_bass_ = std::max(cal_max_bass_, energies.bass);
-            cal_max_mid_ = std::max(cal_max_mid_, energies.mid);
-            cal_max_high_ = std::max(cal_max_high_, energies.high);
-            cal_max_amp_ = std::max(cal_max_amp_, energies.amplitude);
-            // Accumulate for mean-based noise floors
-            cal_sum_bass_ += energies.bass;
-            cal_sum_mid_ += energies.mid;
-            cal_sum_high_ += energies.high;
-            cal_sum_amp_quiet_ += energies.amplitude;
-            cal_quiet_count_++;
-
-            if (elapsed >= 3000) {
-                finish_quiet_calibration();
-            }
-        } else if (cal_state_ == CAL_MUSIC) {
-            cal_sum_amp_ += energies.amplitude;
-            cal_max_bass_ = std::max(cal_max_bass_, energies.bass);
-            cal_max_mid_ = std::max(cal_max_mid_, energies.mid);
-            cal_max_high_ = std::max(cal_max_high_, energies.high);
-            cal_sample_count_++;
-
-            if (elapsed >= 5000) {
-                finish_music_calibration();
-            }
-        }
-    }
-
-    // Silence detection on mid+high energy (not amplitude, which is diluted
-    // by empty high-frequency bins, and not bass, which picks up AC hum/rumble).
-    // Quiet room mid+high ≈ 1-4, music ≈ 10-25.
+    // Silence detection on mid+high energy
     float silence_signal = energies.mid + energies.high;
     auto silence_result = silence_det_.update(silence_signal, now);
 
     if (silence_result.is_below_gate) {
-        // Below squelch gate — suspend AGC, publish zeros
         agc_bass_.suspend();
         agc_mid_.suspend();
         agc_high_.suspend();
         agc_amp_.suspend();
-
         publish_zeros_();
 
-        // Reset BPM on silence transition
         if (silence_result.is_silent && !prev_silence_) {
             if (bpm_sensor_ != nullptr) bpm_sensor_->publish_state(0.0f);
             if (beat_confidence_sensor_ != nullptr) beat_confidence_sensor_->publish_state(0.0f);
@@ -304,62 +215,118 @@ void AudioReactiveComponent::loop() {
             if (onset_det_ != nullptr) onset_det_->reset();
             if (beat_tracker_ != nullptr) beat_tracker_->reset();
         }
-
-        // Update silence sensor (edge-triggered)
         if (silence_result.is_silent != prev_silence_) {
-            if (silence_sensor_ != nullptr) {
-                silence_sensor_->publish_state(silence_result.is_silent);
-            }
+            if (silence_sensor_ != nullptr) silence_sensor_->publish_state(silence_result.is_silent);
             on_silence_changed_callbacks_.call();
         }
         prev_silence_ = silence_result.is_silent;
         return;
     }
 
-    // Not silent — clear silence state
     if (prev_silence_) {
-        if (silence_sensor_ != nullptr) {
-            silence_sensor_->publish_state(false);
-        }
+        if (silence_sensor_ != nullptr) silence_sensor_->publish_state(false);
         on_silence_changed_callbacks_.call();
     }
     prev_silence_ = false;
 
-    // Pre-scale raw FFT magnitudes to ~0-1 range before AGC.
-    // raw_scale_ defaults to 1/20 but is updated by music calibration
-    // to map typical playback levels to ~0.5 (AGC target).
+    // DSP chain: pre-scale → AGC → limiter → EMA smoothing
     float scaled_bass = energies.bass * raw_scale_;
     float scaled_mid = energies.mid * raw_scale_;
     float scaled_high = energies.high * raw_scale_;
     float scaled_amp = energies.amplitude * raw_scale_;
 
-    // AGC normalization — each band uses its own AGC instance
-    float norm_bass = agc_bass_.process(scaled_bass);
-    float norm_mid = agc_mid_.process(scaled_mid);
-    float norm_high = agc_high_.process(scaled_high);
-    float norm_amp = agc_amp_.process(scaled_amp);
-
-    // Dynamics limiter on amplitude
-    norm_amp = limiter_.process(norm_amp, static_cast<float>(update_interval_ms_));
-
-    // Asymmetric EMA smoothing: fast rise, slow fall
-    smooth_bass_ = asymmetric_ema(norm_bass, smooth_bass_);
-    smooth_mid_ = asymmetric_ema(norm_mid, smooth_mid_);
-    smooth_high_ = asymmetric_ema(norm_high, smooth_high_);
-    smooth_amp_ = asymmetric_ema(norm_amp, smooth_amp_);
+    smooth_bass_ = asymmetric_ema(agc_bass_.process(scaled_bass), smooth_bass_);
+    smooth_mid_ = asymmetric_ema(agc_mid_.process(scaled_mid), smooth_mid_);
+    smooth_high_ = asymmetric_ema(agc_high_.process(scaled_high), smooth_high_);
+    smooth_amp_ = asymmetric_ema(
+        limiter_.process(agc_amp_.process(scaled_amp), static_cast<float>(update_interval_ms_)),
+        smooth_amp_);
 
     // Onset detection using scaled 16-band energies
     float scaled_bands[16];
-    for (int i = 0; i < 16; i++) {
-        scaled_bands[i] = energies.bands[i] * raw_scale_;
-    }
+    for (int i = 0; i < 16; i++) scaled_bands[i] = energies.bands[i] * raw_scale_;
     auto onset_result = onset_det_->update(scaled_bands, smooth_bass_, now, complex_onset);
+    if (beat_tracker_ != nullptr) beat_tracker_->process(onset_det_->last_onset_value());
 
-    if (beat_tracker_ != nullptr) {
-        beat_tracker_->process(onset_det_->last_onset_value());
+    publish_sensor_values_(now, energies, onset_result);
+}
+
+void AudioReactiveComponent::process_debug_logging_(uint32_t now, const BandEnergies16 &energies) {
+    static uint32_t last_debug_ms = 0;
+    static float raw_amp_min = 1e10f, raw_amp_max = 0.0f;
+    static float raw_bass_min = 1e10f, raw_bass_max = 0.0f;
+
+    if (energies.amplitude < raw_amp_min) raw_amp_min = energies.amplitude;
+    if (energies.amplitude > raw_amp_max) raw_amp_max = energies.amplitude;
+    if (energies.bass < raw_bass_min) raw_bass_min = energies.bass;
+    if (energies.bass > raw_bass_max) raw_bass_max = energies.bass;
+
+    if ((now - last_debug_ms) < 2000) return;
+
+    ESP_LOGI(TAG, "=== AUDIO DEBUG === (sample_rate=%.0f, fft_size=%u)", sample_rate_, FFT_SIZE);
+    ESP_LOGI(TAG, "RAW (current): amp=%.4f bass=%.4f mid=%.4f high=%.4f",
+             energies.amplitude, energies.bass, energies.mid, energies.high);
+    ESP_LOGI(TAG, "RAW (2s range): amp=[%.4f..%.4f] bass=[%.4f..%.4f]",
+             raw_amp_min, raw_amp_max, raw_bass_min, raw_bass_max);
+    ESP_LOGI(TAG, "RAW bands: [%.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f]",
+             energies.bands[0], energies.bands[1], energies.bands[2], energies.bands[3],
+             energies.bands[4], energies.bands[5], energies.bands[6], energies.bands[7],
+             energies.bands[8], energies.bands[9], energies.bands[10], energies.bands[11],
+             energies.bands[12], energies.bands[13], energies.bands[14], energies.bands[15]);
+    ESP_LOGI(TAG, "SCALED: bass=%.3f mid=%.3f high=%.3f amp=%.3f (raw_scale=%.4f)",
+             energies.bass * raw_scale_, energies.mid * raw_scale_,
+             energies.high * raw_scale_, energies.amplitude * raw_scale_, raw_scale_);
+    ESP_LOGI(TAG, "AGC gains: bass=%.2f mid=%.2f high=%.2f amp=%.2f",
+             agc_bass_.current_gain(), agc_mid_.current_gain(),
+             agc_high_.current_gain(), agc_amp_.current_gain());
+    float dbg_silence_signal = energies.mid + energies.high;
+    ESP_LOGI(TAG, "Silence signal (mid+high)=%.2f | Squelch=%.1f (user_thresh=%.2f, eff_thresh=%.2f, cal_thresh=%.2f)",
+             dbg_silence_signal, silence_det_.squelch(), silence_det_.squelch() * 0.5f,
+             silence_det_.effective_threshold(), cal_store_.squelch_threshold);
+    ESP_LOGI(TAG, "Silence state: prev_silence=%d", prev_silence_);
+    ESP_LOGI(TAG, "Calibration: quiet=%s music=%s scale=%.4f squelch_thresh=%.2f",
+             cal_store_.quiet_calibrated ? "yes" : "no",
+             cal_store_.music_calibrated ? "yes" : "no",
+             cal_store_.raw_scale, cal_store_.squelch_threshold);
+    ESP_LOGI(TAG, "Published: bass=%.3f mid=%.3f high=%.3f amp=%.3f",
+             smooth_bass_, smooth_mid_, smooth_high_, smooth_amp_);
+    ESP_LOGI(TAG, "Ring buffer: %u/%u samples",
+             static_cast<unsigned>(ring_buffer_.available()),
+             static_cast<unsigned>(ring_buffer_.capacity()));
+
+    raw_amp_min = 1e10f; raw_amp_max = 0.0f;
+    raw_bass_min = 1e10f; raw_bass_max = 0.0f;
+    last_debug_ms = now;
+}
+
+void AudioReactiveComponent::accumulate_calibration_(uint32_t now, const BandEnergies16 &energies) {
+    if (cal_state_ == CAL_IDLE) return;
+    uint32_t elapsed = now - cal_start_ms_;
+
+    if (cal_state_ == CAL_QUIET) {
+        cal_max_mid_high_ = std::max(cal_max_mid_high_, energies.mid + energies.high);
+        cal_max_bass_ = std::max(cal_max_bass_, energies.bass);
+        cal_max_mid_ = std::max(cal_max_mid_, energies.mid);
+        cal_max_high_ = std::max(cal_max_high_, energies.high);
+        cal_max_amp_ = std::max(cal_max_amp_, energies.amplitude);
+        cal_sum_bass_ += energies.bass;
+        cal_sum_mid_ += energies.mid;
+        cal_sum_high_ += energies.high;
+        cal_sum_amp_quiet_ += energies.amplitude;
+        cal_quiet_count_++;
+        if (elapsed >= 3000) finish_quiet_calibration();
+    } else if (cal_state_ == CAL_MUSIC) {
+        cal_sum_amp_ += energies.amplitude;
+        cal_max_bass_ = std::max(cal_max_bass_, energies.bass);
+        cal_max_mid_ = std::max(cal_max_mid_, energies.mid);
+        cal_max_high_ = std::max(cal_max_high_, energies.high);
+        cal_sample_count_++;
+        if (elapsed >= 5000) finish_music_calibration();
     }
+}
 
-    // Publish sensor values
+void AudioReactiveComponent::publish_sensor_values_(uint32_t now, const BandEnergies16 &energies,
+                                                     const OnsetDetector::OnsetResult &onset_result) {
     if (bass_sensor_ != nullptr) bass_sensor_->publish_state(smooth_bass_);
     if (mid_sensor_ != nullptr) mid_sensor_->publish_state(smooth_mid_);
     if (high_sensor_ != nullptr) high_sensor_->publish_state(smooth_high_);
@@ -367,37 +334,24 @@ void AudioReactiveComponent::loop() {
 
     if (centroid_sensor_ != nullptr) {
         float nyquist = sample_rate_ / 2.0f;
-        float norm_centroid = (nyquist > 0.0f) ? (energies.centroid / nyquist) : 0.0f;
-        centroid_sensor_->publish_state(norm_centroid);
+        centroid_sensor_->publish_state((nyquist > 0.0f) ? (energies.centroid / nyquist) : 0.0f);
     }
     if (rolloff_sensor_ != nullptr) {
         float nyquist = sample_rate_ / 2.0f;
-        float norm_rolloff = (nyquist > 0.0f) ? (energies.rolloff / nyquist) : 0.0f;
-        rolloff_sensor_->publish_state(norm_rolloff);
+        rolloff_sensor_->publish_state((nyquist > 0.0f) ? (energies.rolloff / nyquist) : 0.0f);
     }
 
-    // Publish onset (pulse on, turned off in loop() after duration)
-    if (onset_result.detected && onset_sensor_ != nullptr) {
-        onset_sensor_->publish_state(true);
-        onset_on_ms_ = now;
-    }
-    if (onset_result.detected && onset_strength_sensor_ != nullptr) {
-        onset_strength_sensor_->publish_state(onset_result.strength);
+    if (onset_result.detected) {
+        if (onset_sensor_ != nullptr) { onset_sensor_->publish_state(true); onset_on_ms_ = now; }
+        if (onset_strength_sensor_ != nullptr) onset_strength_sensor_->publish_state(onset_result.strength);
     }
 
-    // Publish BPM periodically
     if ((now - last_bpm_publish_ms_) >= BPM_PUBLISH_INTERVAL_MS) {
         if (beat_tracker_ != nullptr) {
-            auto bt_result = beat_tracker_->result();
-            if (bpm_sensor_ != nullptr) {
-                bpm_sensor_->publish_state(bt_result.bpm);
-            }
-            if (beat_confidence_sensor_ != nullptr) {
-                beat_confidence_sensor_->publish_state(bt_result.confidence);
-            }
-            if (beat_phase_sensor_ != nullptr) {
-                beat_phase_sensor_->publish_state(bt_result.phase);
-            }
+            auto bt = beat_tracker_->result();
+            if (bpm_sensor_ != nullptr) bpm_sensor_->publish_state(bt.bpm);
+            if (beat_confidence_sensor_ != nullptr) beat_confidence_sensor_->publish_state(bt.confidence);
+            if (beat_phase_sensor_ != nullptr) beat_phase_sensor_->publish_state(bt.phase);
         }
         last_bpm_publish_ms_ = now;
     }
@@ -527,8 +481,7 @@ void AudioReactiveSquelchNumber::setup() {
 }
 
 void AudioReactiveSquelchNumber::control(float value) {
-    parent_->silence_det_.set_squelch(value);
-    parent_->squelch_ = value;
+    parent_->set_squelch(value);
     this->publish_state(value);
 }
 
@@ -654,7 +607,7 @@ void AudioReactiveCalibrateQuietButton::press_action() {
     parent_->start_quiet_calibration();
 }
 
-void AudioReactiveCalibrateMusictButton::press_action() {
+void AudioReactiveCalibrateMusicButton::press_action() {
     parent_->start_music_calibration();
 }
 

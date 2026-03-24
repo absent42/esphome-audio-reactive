@@ -34,7 +34,7 @@ class AudioReactiveComponent;
 class AudioReactiveMicrophoneMuteSwitch;
 class AudioReactiveResetAGCButton;
 class AudioReactiveCalibrateQuietButton;
-class AudioReactiveCalibrateMusictButton;
+class AudioReactiveCalibrateMusicButton;
 class AudioReactiveSquelchNumber;
 class AudioReactiveDetectionModeSelect;
 
@@ -96,7 +96,7 @@ class AudioReactiveCalibrateQuietButton : public button::Button, public Componen
 };
 
 /// Button entity for music level calibration.
-class AudioReactiveCalibrateMusictButton : public button::Button, public Component {
+class AudioReactiveCalibrateMusicButton : public button::Button, public Component {
  public:
     void set_parent(AudioReactiveComponent *parent) { parent_ = parent; }
 
@@ -137,7 +137,7 @@ class AudioReactiveComponent : public Component {
     void set_microphone(microphone::Microphone *mic) { mic_ = mic; }
     void set_update_interval(uint32_t interval_ms) { update_interval_ms_ = interval_ms; }
     void set_beat_sensitivity(int sensitivity) { beat_sensitivity_ = sensitivity; }
-    void set_squelch(float squelch) { squelch_ = squelch; }
+    void set_squelch(float squelch) { squelch_ = squelch; silence_det_.set_squelch(squelch); }
     void set_sample_rate(float rate) { sample_rate_ = rate; }
     void set_debug_logging(bool enabled) { debug_logging_ = enabled; }
 
@@ -163,7 +163,7 @@ class AudioReactiveComponent : public Component {
     void set_mute_switch(AudioReactiveMicrophoneMuteSwitch *s) { mute_switch_ = s; }
     void set_reset_agc_button(AudioReactiveResetAGCButton *b) { reset_button_ = b; }
     void set_calibrate_quiet_button(AudioReactiveCalibrateQuietButton *b) { calibrate_quiet_button_ = b; }
-    void set_calibrate_music_button(AudioReactiveCalibrateMusictButton *b) { calibrate_music_button_ = b; }
+    void set_calibrate_music_button(AudioReactiveCalibrateMusicButton *b) { calibrate_music_button_ = b; }
     void set_detection_mode_select(AudioReactiveDetectionModeSelect *s) { detection_mode_select_ = s; }
 
     void update_beat_sensitivity(int value);
@@ -191,7 +191,7 @@ class AudioReactiveComponent : public Component {
     friend class AudioReactiveMicrophoneMuteSwitch;
     friend class AudioReactiveResetAGCButton;
     friend class AudioReactiveCalibrateQuietButton;
-    friend class AudioReactiveCalibrateMusictButton;
+    friend class AudioReactiveCalibrateMusicButton;
     friend class AudioReactiveSquelchNumber;
     friend class AudioReactiveDetectionModeSelect;
 
@@ -222,7 +222,7 @@ class AudioReactiveComponent : public Component {
     AudioReactiveMicrophoneMuteSwitch *mute_switch_{nullptr};
     AudioReactiveResetAGCButton *reset_button_{nullptr};
     AudioReactiveCalibrateQuietButton *calibrate_quiet_button_{nullptr};
-    AudioReactiveCalibrateMusictButton *calibrate_music_button_{nullptr};
+    AudioReactiveCalibrateMusicButton *calibrate_music_button_{nullptr};
     AudioReactiveDetectionModeSelect *detection_mode_select_{nullptr};
 
     // Calibration persistence and state
@@ -322,14 +322,21 @@ class AudioReactiveComponent : public Component {
 
     /// Publish zero values to all sensors (used when muted or silent).
     void publish_zeros_();
+    /// Debug logging block (runs every 2s when debug_logging_ is true).
+    void process_debug_logging_(uint32_t now, const BandEnergies16 &energies);
+    /// Accumulate calibration samples during quiet/music calibration.
+    void accumulate_calibration_(uint32_t now, const BandEnergies16 &energies);
+    /// Publish all sensor values from the current DSP frame.
+    void publish_sensor_values_(uint32_t now, const BandEnergies16 &energies, const OnsetDetector::OnsetResult &onset_result);
+
+    // Asymmetric EMA coefficients: fast attack (~36ms at 20Hz), slow decay (~270ms)
+    static constexpr float EMA_FAST_RISE = 0.75f;
+    static constexpr float EMA_SLOW_FALL = 0.17f;
 
     /// Apply asymmetric EMA smoothing: fast rise, slow fall.
     static float asymmetric_ema(float raw, float prev) {
-        if (raw > prev) {
-            return 0.75f * raw + 0.25f * prev;  // fast rise
-        } else {
-            return 0.17f * raw + 0.83f * prev;  // slow fall
-        }
+        float alpha = (raw > prev) ? EMA_FAST_RISE : EMA_SLOW_FALL;
+        return alpha * raw + (1.0f - alpha) * prev;
     }
 };
 

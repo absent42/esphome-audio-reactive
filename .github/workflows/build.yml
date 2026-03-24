@@ -6,7 +6,24 @@ on:
   workflow_dispatch:
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Run native unit tests
+        run: pio test -e native
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -20,10 +37,10 @@ jobs:
           - name: m5stickc-plus2
             yaml: m5stickc-plus2.yaml
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Build firmware
-        uses: esphome/build-action@v6
+        uses: esphome/build-action@v4
         id: build
         with:
           yaml-file: ${{ matrix.device.yaml }}
@@ -34,7 +51,7 @@ jobs:
           cp ${{ steps.build.outputs.name }}/*.factory.bin static/firmware/${{ matrix.device.name }}.factory.bin
 
       - name: Upload firmware artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: firmware-${{ matrix.device.name }}
           path: static/firmware/${{ matrix.device.name }}.factory.bin
@@ -48,16 +65,16 @@ jobs:
     environment:
       name: github-pages
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Download all firmware
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           path: static/firmware
           merge-multiple: true
 
       - name: Deploy to GitHub Pages
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v3
         with:
           path: static
 
