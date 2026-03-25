@@ -27,7 +27,7 @@ The best starting point for most users, readily available.
 | **Feedback** | LED |
 | **Power** | USB-C |
 | **Size** | 24 x 24 x 17mm |
-| **Where to buy** | [M5Stack store](https://shop.m5stack.com/products/atom-echo-smart-speaker-dev-kit), [Pi Hut](https://thepihut.com/products/atom-echo-smart-speaker-dev-kit), [Amazon US](https://amzn.to/4dnA7GH), [Amazon UK](https://amzn.to/4bdYJQM) |
+| **Where to buy** | [M5Stack store](https://shop.m5stack.com/products/atom-echo-smart-speaker-dev-kit), [Pi Hut](https://thepihut.com/products/atom-echo-smart-speaker-dev-kit), [Amazon US](https://amzn.to/4dnA7GH), [Amazon UK](https://amzn.to/4bdYJQM), [Amazon DE](https://amzn.to/47lapii), [Amazon FR](https://amzn.to/4rU1Ja6), [Amazon IT](https://amzn.to/4rSoJWO) |
 
 ### M5Stack ATOM Echo S3R
 
@@ -61,7 +61,7 @@ Feature-rich board with dual MEMS microphones, 7-LED ring, and optional battery 
 | **Feedback** | LED ring |
 | **Power** | USB-C, optional battery |
 | **Size** | 58 x 58 x 49mm |
-| **Where to buy** | [Waveshare store](https://www.waveshare.com/esp32-s3-audio-board.htm), [Amazon US](https://amzn.to/4lqAoKU), [Amazon UK](https://amzn.to/414SkRU) |
+| **Where to buy** | [Waveshare store](https://www.waveshare.com/esp32-s3-audio-board.htm), [Amazon US](https://amzn.to/4lqAoKU), [Amazon UK](https://amzn.to/414SkRU), [Amazon DE](https://amzn.to/4bvKK9b), [Amazon FR](https://amzn.to/4uQIu3U) |
 
 ### M5StickC Plus2
 
@@ -77,7 +77,7 @@ A compact development kit with a built-in screen, battery, and PDM microphone.
 | **Feedback** | Screen |
 | **Power** | USB-C, built-in battery |
 | **Size** | 54 x 25 x 16mm |
-| **Where to buy** | [M5Stack store](https://shop.m5stack.com/products/m5stickc-plus2-esp32-mini-iot-development-kit), [Pi Hut](https://thepihut.com/products/m5stickc-plus2-esp32-mini-iot-development-kit), [Amazon US](https://amzn.to/470ydYE), [Amazon UK](https://amzn.to/4brZ0i4) |
+| **Where to buy** | [M5Stack store](https://shop.m5stack.com/products/m5stickc-plus2-esp32-mini-iot-development-kit), [Pi Hut](https://thepihut.com/products/m5stickc-plus2-esp32-mini-iot-development-kit), [Amazon US](https://amzn.to/470ydYE), [Amazon UK](https://amzn.to/4brZ0i4), [Amazon DE](https://amzn.to/3PZFwde), [Amazon FR](https://amzn.to/4uM3Dwh), [Amazon IT](https://amzn.to/4c3nJdU) |
 
 ## Installation
 
@@ -336,7 +336,3 @@ Switch between modes via the Detection Mode select entity, or the integration se
 6. Spectral flux onset detection identifies musical events across all frequency bands
 7. Dynamics limiter and asymmetric EMA smoothing prevent jittery sensor output
 8. Silence detector gates output when mid+high energy is below the calibrated threshold
-
-## License
-
-MIT
