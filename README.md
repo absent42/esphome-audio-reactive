@@ -324,6 +324,10 @@ Detects any sudden change in the frequency spectrum — kick drums, snare hits, 
 
 Only detects bass energy threshold crossings. Optimized for rhythmic music with a prominent low-frequency beat (EDM, pop, rock, hip-hop). Includes hysteresis to prevent rapid re-triggering.
 
+### Complex domain
+
+Uses both phase and magnitude information (Dixon 2006 phase advance algorithm) with spectral whitening. Distinguishes transients from sustained tones, making it better at detecting soft or subtle onsets — gentle percussion, fingerpicked guitar, or quiet vocal entrances that spectral flux might miss.
+
 Switch between modes via the Detection Mode select entity, or the integration sets it automatically per scene.
 
 ## How It Works
