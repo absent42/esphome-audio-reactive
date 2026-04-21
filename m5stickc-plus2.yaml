@@ -46,6 +46,7 @@ microphone:
 audio_reactive:
   id: audio_analysis
   microphone: mic
+  dsp_tier: basic               # Classic ESP32: 512-FFT / 22.05kHz pipeline
   update_interval: 50ms
   beat_sensitivity: 50
   squelch: 10

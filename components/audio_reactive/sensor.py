@@ -4,6 +4,7 @@ import esphome.config_validation as cv
 from esphome.components import sensor
 from esphome.const import (
     CONF_ID,
+    ENTITY_CATEGORY_DIAGNOSTIC,
     STATE_CLASS_MEASUREMENT,
 )
 
@@ -32,6 +33,11 @@ CONF_SUB_BASS_ENERGY = "sub_bass_energy"
 CONF_LOW_MID_ENERGY = "low_mid_energy"
 CONF_UPPER_MID_ENERGY = "upper_mid_energy"
 CONF_AIR_ENERGY = "air_energy"
+
+# Debug sensors (both tiers): mean/peak FFT task cycle time in microseconds.
+# Published at 1Hz from loop(), measured inside fft_task_func excluding wait time.
+CONF_FFT_TASK_CYCLE_MEAN_US = "fft_task_cycle_mean_us"
+CONF_FFT_TASK_CYCLE_PEAK_US = "fft_task_cycle_peak_us"
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -107,6 +113,20 @@ CONFIG_SCHEMA = cv.Schema(
             icon="mdi:equalizer",
             state_class=STATE_CLASS_MEASUREMENT,
         ),
+        cv.Optional(CONF_FFT_TASK_CYCLE_MEAN_US): sensor.sensor_schema(
+            unit_of_measurement="µs",
+            accuracy_decimals=1,
+            icon="mdi:timer-outline",
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            state_class=STATE_CLASS_MEASUREMENT,
+        ),
+        cv.Optional(CONF_FFT_TASK_CYCLE_PEAK_US): sensor.sensor_schema(
+            unit_of_measurement="µs",
+            accuracy_decimals=0,
+            icon="mdi:timer-alert-outline",
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            state_class=STATE_CLASS_MEASUREMENT,
+        ),
     }
 )
 
@@ -138,6 +158,8 @@ async def to_code(config):
         (CONF_LOW_MID_ENERGY, "set_low_mid_energy_sensor"),
         (CONF_UPPER_MID_ENERGY, "set_upper_mid_energy_sensor"),
         (CONF_AIR_ENERGY, "set_air_energy_sensor"),
+        (CONF_FFT_TASK_CYCLE_MEAN_US, "set_fft_task_cycle_mean_sensor"),
+        (CONF_FFT_TASK_CYCLE_PEAK_US, "set_fft_task_cycle_peak_sensor"),
     ]:
         if key in config:
             if key in _PRO_ONLY_KEYS:

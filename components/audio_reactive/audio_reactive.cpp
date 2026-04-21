@@ -4,6 +4,7 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/preferences.h"
 #include "esphome/core/helpers.h"
+#include "esp_timer.h"
 #include <cmath>
 #include <cstring>
 
@@ -93,7 +94,8 @@ void AudioReactiveComponent::setup() {
                  cal_store_v2_.quiet_calibrated ? "yes" : "no",
                  cal_store_v2_.music_calibrated ? "yes" : "no",
                  cal_store_v2_.raw_scale, cal_store_v2_.squelch_threshold);
-        // Mirror V2 -> V1 for the Chunk 2 fallback apply path (so agc_bass_/mid_/high_ get non-zero floors).
+        // Mirror V2 -> V1 so the shared apply path (apply_calibration) gives
+        // agc_bass_/mid_/high_/amp_ non-zero floors derived from the musical-band floors.
         cal_store_.squelch_threshold = cal_store_v2_.squelch_threshold;
         cal_store_.noise_floor_bass = cal_store_v2_.noise_floor[1];   // bass
         cal_store_.noise_floor_mid  = cal_store_v2_.noise_floor[3];   // mid
@@ -149,6 +151,14 @@ void AudioReactiveComponent::fft_task_func(void *param) {
             continue;
         }
 
+        // Capture start AFTER the wait path returns — instrumentation must measure only
+        // FFT + DSP processing time, never blocking sleep. The peak/mean stats are only
+        // meaningful if this timer does not include ulTaskNotifyTake() wait latency.
+        // Gated on sensors being wired so users who don't opt-in pay zero overhead.
+        bool measure_cycle = (self->fft_task_cycle_mean_sensor_ != nullptr) ||
+                             (self->fft_task_cycle_peak_sensor_ != nullptr);
+        uint64_t start_us = measure_cycle ? esp_timer_get_time() : 0;
+
         // Peek FFT_SIZE samples (don't consume yet — we only advance by HOP_SIZE)
         self->ring_buffer_.peek(fft_buffer, FFT_SIZE);
 
@@ -177,7 +187,7 @@ void AudioReactiveComponent::fft_task_func(void *param) {
 #ifndef AUDIO_REACTIVE_PRO
         float complex_onset = 0.0f;
 
-        // Basic-tier complex-domain onset detection (replaced by SuperFlux in Chunk 4 on pro tier)
+        // Basic-tier complex-domain onset detection (pro tier uses SuperFlux instead, below)
         // Whitened magnitudes for onset detection (original magnitudes used for band energies)
         float *whitened_mags = self->whitened_mags_;
         std::memcpy(whitened_mags, magnitudes, bins * sizeof(float));
@@ -247,6 +257,16 @@ void AudioReactiveComponent::fft_task_func(void *param) {
         self->shared_write_idx_ = write_slot;
         self->new_data_available_ = true;
 
+        // Drain cycle timing into shared counters. Gated on measure_cycle so the
+        // esp_timer_get_time() call is skipped entirely when no sensor is wired.
+        if (measure_cycle) {
+            uint64_t end_us = esp_timer_get_time();
+            uint32_t delta_us = static_cast<uint32_t>(end_us - start_us);
+            self->fft_cycle_total_us_ += delta_us;
+            self->fft_cycle_samples_++;
+            if (delta_us > self->fft_cycle_peak_us_) self->fft_cycle_peak_us_ = delta_us;
+        }
+
         // Advance by HOP_SIZE (75% overlap)
         self->ring_buffer_.advance(self->HOP_SIZE);
     }
@@ -268,6 +288,24 @@ void AudioReactiveComponent::loop() {
             onset_sensor_->publish_state(false);
         }
         onset_on_ms_ = 0;
+    }
+
+    // FFT cycle stats: drain 1s window and publish mean/peak. Counters are
+    // written only from fft_task_func; reading them here on the main core is
+    // racy in principle but the values are uint32_t and tearing would at worst
+    // produce a momentarily stale sample — acceptable for a 1Hz diagnostic.
+    if (now - fft_cycle_last_publish_ms_ >= 1000) {
+        if (fft_cycle_samples_ > 0) {
+            float mean_us = static_cast<float>(fft_cycle_total_us_) / fft_cycle_samples_;
+            if (fft_task_cycle_mean_sensor_ != nullptr)
+                fft_task_cycle_mean_sensor_->publish_state(mean_us);
+            if (fft_task_cycle_peak_sensor_ != nullptr)
+                fft_task_cycle_peak_sensor_->publish_state(static_cast<float>(fft_cycle_peak_us_));
+        }
+        fft_cycle_total_us_ = 0;
+        fft_cycle_peak_us_ = 0;
+        fft_cycle_samples_ = 0;
+        fft_cycle_last_publish_ms_ = now;
     }
 
     if (muted_) return;
@@ -359,7 +397,7 @@ void AudioReactiveComponent::loop() {
         smooth_amp_);
 
     // Onset detection + beat tracking: basic-tier only. Pro tier uses SuperFlux
-    // (written by the FFT task) and, in Chunk 5, BTrack.
+    // and BTrack (both written by the FFT task).
     OnsetDetector::OnsetResult onset_result{};
 #ifndef AUDIO_REACTIVE_PRO
     float scaled_bands[16];
@@ -521,8 +559,9 @@ void AudioReactiveComponent::publish_sensor_values_(uint32_t now, const BandEner
     }
 #else
     // Pro tier: SuperFlux event-driven onset publish happens in loop() before this
-    // function runs. Beat tracking migrates to BTrack in Chunk 5 — for now, the
-    // bpm/confidence/phase sensors are simply not updated on pro tier.
+    // function runs. BPM / confidence / phase sensors are published by the BTrack
+    // block in loop() as well, so this function is only responsible for the
+    // basic-tier legacy publish path.
     (void)onset_result;
 #endif
 }
@@ -730,9 +769,9 @@ void AudioReactiveComponent::finish_quiet_calibration() {
     cal_pref_.save(&cal_store_);
 
 #ifdef AUDIO_REACTIVE_PRO
-    // Chunk 3 will populate cal_store_v2_.noise_floor[7] from the musical_bands
-    // accumulator. For now, reuse the V1->V2 interpolation on the freshly-computed
-    // V1 values so next-boot V2 load has sensible per-band floors.
+    // Reuse the V1->V2 interpolation on the freshly-computed V1 values so the
+    // V2 store gets sensible per-musical-band floors. A dedicated per-band
+    // accumulator during quiet calibration is a possible future refinement.
     migrate_v1_to_v2(cal_store_, cal_store_v2_);
     cal_store_v2_.quiet_calibrated = true;
     cal_pref_v2_.save(&cal_store_v2_);
@@ -808,7 +847,7 @@ void AudioReactiveComponent::apply_calibration() {
 
 #ifdef AUDIO_REACTIVE_PRO
 void AudioReactiveComponent::apply_calibration_v2_() {
-    // Chunk 3: push per-musical-band noise floors directly into the 7 musical_bands AGCs.
+    // Push per-musical-band noise floors directly into the 7 musical_bands AGCs.
     musical_bands_.set_noise_floors(cal_store_v2_.noise_floor);
     // Also invoke the basic-tier apply path so shared scalar state (raw_scale_,
     // squelch threshold, basic-tier AGC floors mirrored from V2) stays in sync.

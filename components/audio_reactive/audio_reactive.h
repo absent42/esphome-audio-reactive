@@ -151,6 +151,8 @@ class AudioReactiveComponent : public Component {
     void set_beat_confidence_sensor(sensor::Sensor *s) { beat_confidence_sensor_ = s; }
     void set_beat_phase_sensor(sensor::Sensor *s) { beat_phase_sensor_ = s; }
     void set_onset_strength_sensor(sensor::Sensor *s) { onset_strength_sensor_ = s; }
+    void set_fft_task_cycle_mean_sensor(sensor::Sensor *s) { fft_task_cycle_mean_sensor_ = s; }
+    void set_fft_task_cycle_peak_sensor(sensor::Sensor *s) { fft_task_cycle_peak_sensor_ = s; }
 
     // Binary sensor setters
     void set_onset_binary_sensor(binary_sensor::BinarySensor *s) { onset_sensor_ = s; }
@@ -220,8 +222,19 @@ class AudioReactiveComponent : public Component {
     sensor::Sensor *beat_confidence_sensor_{nullptr};
     sensor::Sensor *beat_phase_sensor_{nullptr};
     sensor::Sensor *onset_strength_sensor_{nullptr};
+    sensor::Sensor *fft_task_cycle_mean_sensor_{nullptr};
+    sensor::Sensor *fft_task_cycle_peak_sensor_{nullptr};
     binary_sensor::BinarySensor *onset_sensor_{nullptr};
     binary_sensor::BinarySensor *silence_sensor_{nullptr};
+
+    // Running stats over 1-second windows for fft_task_cycle_us sensors.
+    // Populated by fft_task_func(), drained + published by loop() on a 1Hz cadence.
+    // "peak" is a running max — spec target is p99 <= 18ms, and max over ~86 samples
+    // (1 second at 86Hz pro-tier frame rate) is a safe upper bound for p99.
+    uint32_t fft_cycle_total_us_{0};
+    uint32_t fft_cycle_peak_us_{0};
+    uint32_t fft_cycle_samples_{0};
+    uint32_t fft_cycle_last_publish_ms_{0};
 
     // Platform entities
     AudioReactiveBeatSensitivityNumber *beat_sensitivity_number_{nullptr};
@@ -257,9 +270,9 @@ class AudioReactiveComponent : public Component {
     void apply_calibration();
 #ifdef AUDIO_REACTIVE_PRO
     /// Pro-tier calibration application.
-    /// Chunk 2: delegates to basic-tier apply_calibration() as a fallback so the
-    /// 4 basic-tier AGCs still receive noise floors during the pro-tier transition.
-    /// Chunk 3: rewritten to wire musical_bands AGCs directly from cal_store_v2_.noise_floor[7].
+    /// Pushes per-musical-band noise floors from cal_store_v2_.noise_floor[7] into
+    /// the 7 musical_bands AGCs, then calls apply_calibration() to sync shared
+    /// scalar state (raw_scale_, squelch threshold, basic-tier AGC floors).
     void apply_calibration_v2_();
 #endif
 

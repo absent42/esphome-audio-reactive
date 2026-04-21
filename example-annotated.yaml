@@ -159,16 +159,24 @@ audio_reactive:
   id: audio_analysis
   microphone: mic
 
+  # --- DSP tier ---
+  # Selects which DSP pipeline runs on-device.
+  #   auto   (default) - 'pro' on ESP32-S3 + PSRAM, 'basic' everywhere else.
+  #   basic            - 512-FFT / 22.05kHz / 16-band aggregator / complex-onset + autocorrelation BPM.
+  #                      Works on all ESP32 variants including the original ESP32 and C3.
+  #   pro              - 2048-FFT / 44.1kHz / 32-mel -> 7 musical bands / SuperFlux onset / BTrack BPM.
+  #                      Requires an ESP32-S3 board with a top-level 'psram:' block. YAML will
+  #                      fail validation on non-S3 or no-PSRAM hardware.
+  # The microphone's declared sample_rate MUST match the tier: 22050 for basic, 44100 for pro.
+  dsp_tier: auto
+
   # --- Core settings ---
   update_interval: 50ms           # Processing interval (default: 50ms)
   beat_sensitivity: 50            # 1-100, higher = reacts to quieter onsets (default: 50)
   squelch: 10                     # 0-100, noise gate threshold (default: 10)
 
-  # --- Sample rate (must match microphone config) ---
-  sample_rate: 22050              # PDM devices: 22050, codec devices: 44100
-
   # --- FFT size ---
-  # fft_size: 512                 # Fixed at 512. Other sizes not yet supported.
+  # fft_size: 512                 # Fixed at 512 on basic tier. Pro tier uses 2048 internally.
 
   # --- Debug logging ---
   # debug_logging: true           # Logs raw FFT values, AGC gains, silence state every 2s.
@@ -344,6 +352,30 @@ sensor:
       name: "Onset Strength"      # 0.0-1.0, magnitude of the most recent onset/beat
                                    # Updated each time onset_detected fires
 
+    # --- Pro-tier musical bands (requires dsp_tier: pro) ---
+    # Adds 4 extra perceptual bands on top of bass/mid/high for finer audio-reactive
+    # effects. Each is a 0.0-1.0 normalized energy aggregated from the 32-mel filterbank.
+    # YAML validation fails if any of these are declared without dsp_tier: pro.
+    # sub_bass_energy:
+    #   name: "Sub Bass Energy"   # ~20-60 Hz  — subwoofer / kick drum fundamental
+    # low_mid_energy:
+    #   name: "Low Mid Energy"    # ~250-500 Hz — vocal warmth, bass guitar body
+    # upper_mid_energy:
+    #   name: "Upper Mid Energy"  # ~2-4 kHz   — vocal clarity, snare crack
+    # air_energy:
+    #   name: "Air Energy"        # ~8-16 kHz  — cymbals, sibilance, sparkle
+
+    # --- FFT task cycle debug sensors (diagnostic, both tiers) ---
+    # Runtime performance telemetry. Measured from inside the FFT task, excluding
+    # blocking wait time. Published at 1Hz. Useful for tuning and for detecting
+    # buffer-overrun risk: pro-tier target is p99 <= 18ms per frame at 86Hz.
+    # Both sensors are opt-in — if you don't declare them, the instrumentation is
+    # skipped entirely inside the FFT task (zero runtime overhead).
+    # fft_task_cycle_mean_us:
+    #   name: "FFT Task Cycle (mean)"
+    # fft_task_cycle_peak_us:
+    #   name: "FFT Task Cycle (peak)"
+
 binary_sensor:
   - platform: audio_reactive
     audio_reactive_id: audio_analysis
@@ -351,6 +383,13 @@ binary_sensor:
       name: "Audio Sensor"        # The entity you select in the integration
     silence:
       name: "Silence"             # On when room is quiet (noise gate active)
+
+    # --- Pro-tier binary sensors (requires dsp_tier: pro) ---
+    # calibration_stale:
+    #   name: "Audio Calibration Stale"   # ON when calibration is missing or migrated from V1
+    #   entity_category: diagnostic
+    # beat_event:
+    #   name: "Audio Beat"                # Pulses 30ms on every BTrack beat boundary
 
 # =============================================================================
 # Physical Button — Standard Actions

@@ -70,6 +70,7 @@ microphone:
 audio_reactive:
   id: audio_analysis
   microphone: mic
+  dsp_tier: pro                 # ESP32-S3 + PSRAM: 2048-FFT / 44.1kHz pro pipeline
   update_interval: 50ms
   beat_sensitivity: 50
   squelch: 10
