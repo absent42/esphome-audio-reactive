@@ -166,6 +166,8 @@ binary_sensor:
     calibration_stale:
       name: "Audio Calibration Stale"
       entity_category: diagnostic
+    beat_event:
+      name: "Audio Beat"
   - platform: gpio
     pin:
       number: GPIO41

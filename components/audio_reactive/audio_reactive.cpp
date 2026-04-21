@@ -233,6 +233,16 @@ void AudioReactiveComponent::fft_task_func(void *param) {
         auto sf = self->superflux_.process(self->shared_frames_[write_slot].mel_frame);
         self->shared_frames_[write_slot].superflux_strength = sf.strength;
         self->shared_frames_[write_slot].superflux_event = sf.event;
+        // BTrack consumes the SuperFlux strength envelope and emits bpm/phase/conf/event.
+        // Must run before the atomic publish so readers see a consistent snapshot.
+        auto bt = self->btrack_.process(sf.strength);
+        self->shared_frames_[write_slot].btrack_bpm = bt.bpm;
+        self->shared_frames_[write_slot].btrack_phase = bt.beat_phase;
+        self->shared_frames_[write_slot].btrack_confidence = bt.confidence;
+        self->shared_frames_[write_slot].btrack_event = bt.beat_event;
+        // frame_id is monotonic, written last so the main loop can use it as a
+        // "new data" indicator with a simple inequality check.
+        self->shared_frames_[write_slot].frame_id = ++self->next_frame_id_;
 #endif
         self->shared_write_idx_ = write_slot;
         self->new_data_available_ = true;
@@ -273,14 +283,25 @@ void AudioReactiveComponent::loop() {
 #endif
 
 #ifdef AUDIO_REACTIVE_PRO
-    // Snapshot mel frame + SuperFlux output from the same read slot (copy is cheap
-    // at N_MEL=32) so the 7-band aggregation and onset publish both see a consistent
-    // frame. Reading individual fields after this point risks tearing if the FFT task
-    // re-publishes mid-loop.
+    // Snapshot mel frame + SuperFlux + BTrack outputs from the same read slot (copy
+    // is cheap at N_MEL=32) so the 7-band aggregation, onset publish, and beat publish
+    // all see a consistent frame. Reading individual fields after this point risks
+    // tearing if the FFT task re-publishes mid-loop.
     float mel_frame_snapshot[N_MEL];
     std::memcpy(mel_frame_snapshot, shared_frames_[read_slot].mel_frame, sizeof(mel_frame_snapshot));
     float sf_strength = shared_frames_[read_slot].superflux_strength;
     bool sf_event = shared_frames_[read_slot].superflux_event;
+    float bt_bpm = shared_frames_[read_slot].btrack_bpm;
+    float bt_phase = shared_frames_[read_slot].btrack_phase;
+    float bt_confidence = shared_frames_[read_slot].btrack_confidence;
+    bool bt_event = shared_frames_[read_slot].btrack_event;
+    uint32_t frame_id = shared_frames_[read_slot].frame_id;
+    // frame-id guard: main loop (~50Hz) consumes FFT frames (~86Hz) at a slower
+    // cadence, so ~1 in 2 frames is naturally dropped. The beat_event publish
+    // below checks frame_id != last_consumed_frame_id_ to avoid double-publishing
+    // the same event when the main loop runs twice before the FFT task advances.
+    bool new_frame = (frame_id != last_consumed_frame_id_);
+    last_consumed_frame_id_ = frame_id;
 #endif
 
     last_process_ms_ = now;
@@ -307,6 +328,7 @@ void AudioReactiveComponent::loop() {
             if (beat_tracker_ != nullptr) beat_tracker_->reset();
 #ifdef AUDIO_REACTIVE_PRO
             superflux_.reset();
+            btrack_.reset();
 #endif
         }
         if (silence_result.is_silent != prev_silence_) {
@@ -356,6 +378,23 @@ void AudioReactiveComponent::loop() {
         if (onset_strength_sensor_ != nullptr) onset_strength_sensor_->publish_state(sf_strength);
         if (onset_sensor_ != nullptr) onset_sensor_->publish_state(true);
         onset_on_ms_ = now;
+    }
+
+    // BTrack publish: BPM cadence-limited (every 3s like basic-tier), phase/confidence
+    // every loop iteration, beat_event pulsed for 30ms on a new frame only.
+    if ((now - last_bpm_publish_ms_) >= BPM_PUBLISH_INTERVAL_MS) {
+        if (bpm_sensor_ != nullptr) bpm_sensor_->publish_state(bt_bpm);
+        last_bpm_publish_ms_ = now;
+    }
+    if (beat_phase_sensor_ != nullptr) beat_phase_sensor_->publish_state(bt_phase);
+    if (beat_confidence_sensor_ != nullptr) beat_confidence_sensor_->publish_state(bt_confidence);
+    if (new_frame && beat_event_sensor_ != nullptr && bt_event) {
+        beat_event_sensor_->publish_state(true);
+        beat_event_off_at_ms_ = now + 30;  // 30ms pulse
+    }
+    if (beat_event_sensor_ != nullptr && beat_event_off_at_ms_ > 0 && now >= beat_event_off_at_ms_) {
+        beat_event_sensor_->publish_state(false);
+        beat_event_off_at_ms_ = 0;
     }
 #endif
 
@@ -519,6 +558,7 @@ void AudioReactiveComponent::set_muted(bool muted) {
         if (onset_det_ != nullptr) onset_det_->reset();
 #ifdef AUDIO_REACTIVE_PRO
         superflux_.reset();
+        btrack_.reset();
 #endif
 
         // Set silence on
@@ -573,6 +613,7 @@ void AudioReactiveComponent::reset_agc() {
     }
 #ifdef AUDIO_REACTIVE_PRO
     superflux_.reset();
+    btrack_.reset();
 #endif
     limiter_.reset();
     smooth_bass_ = 0.0f;

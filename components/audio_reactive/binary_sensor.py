@@ -9,6 +9,7 @@ from . import AudioReactiveComponent, CONF_AUDIO_REACTIVE_ID, resolve_tier_from_
 CONF_ONSET_DETECTED = "onset_detected"
 CONF_SILENCE = "silence"
 CONF_CALIBRATION_STALE = "calibration_stale"
+CONF_BEAT_EVENT = "beat_event"
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -20,6 +21,9 @@ CONFIG_SCHEMA = cv.Schema(
             icon="mdi:volume-off",
         ),
         cv.Optional(CONF_CALIBRATION_STALE): binary_sensor.binary_sensor_schema(),
+        cv.Optional(CONF_BEAT_EVENT): binary_sensor.binary_sensor_schema(
+            icon="mdi:metronome",
+        ),
     }
 )
 
@@ -44,3 +48,14 @@ async def to_code(config):
             )
         sens = await binary_sensor.new_binary_sensor(config[CONF_CALIBRATION_STALE])
         cg.add(parent.set_calibration_stale_binary_sensor(sens))
+
+    if CONF_BEAT_EVENT in config:
+        tier = resolve_tier_from_core()
+        if tier != DSP_TIER_PRO:
+            raise cv.Invalid(
+                "binary_sensor.beat_event requires dsp_tier: pro. "
+                "This sensor exposes the BTrack beat-phase wrap event, which is "
+                "only produced on ESP32-S3 + PSRAM boards."
+            )
+        sens = await binary_sensor.new_binary_sensor(config[CONF_BEAT_EVENT])
+        cg.add(parent.set_beat_event_binary_sensor(sens))

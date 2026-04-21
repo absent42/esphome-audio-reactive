@@ -20,7 +20,7 @@
 #include "mel_filterbank.h"
 #include "musical_bands.h"
 #include "superflux_onset.h"
-// #include "btrack.h"
+#include "btrack.h"
 #endif
 
 #include "esphome/core/component.h"
@@ -157,6 +157,7 @@ class AudioReactiveComponent : public Component {
     void set_silence_binary_sensor(binary_sensor::BinarySensor *s) { silence_sensor_ = s; }
 #ifdef AUDIO_REACTIVE_PRO
     void set_calibration_stale_binary_sensor(binary_sensor::BinarySensor *s) { calibration_stale_sensor_ = s; }
+    void set_beat_event_binary_sensor(binary_sensor::BinarySensor *s) { beat_event_sensor_ = s; }
     void set_sub_bass_energy_sensor(sensor::Sensor *s) { sub_bass_sensor_ = s; }
     void set_low_mid_energy_sensor(sensor::Sensor *s) { low_mid_sensor_ = s; }
     void set_upper_mid_energy_sensor(sensor::Sensor *s) { upper_mid_sensor_ = s; }
@@ -310,6 +311,11 @@ class AudioReactiveComponent : public Component {
         float mel_frame[32]{};
         float superflux_strength{0.0f};
         bool superflux_event{false};
+        float btrack_bpm{120.0f};
+        float btrack_phase{0.0f};
+        float btrack_confidence{0.0f};
+        bool btrack_event{false};
+        uint32_t frame_id{0};
 #endif
     };
     SharedFrame shared_frames_[2]{};
@@ -377,12 +383,23 @@ class AudioReactiveComponent : public Component {
     // Diagnostic binary sensor - exposed via binary_sensor.py
     binary_sensor::BinarySensor *calibration_stale_sensor_{nullptr};
 
+    // BTrack beat event binary sensor (published on beat boundaries, 30ms pulse).
+    binary_sensor::BinarySensor *beat_event_sensor_{nullptr};
+    uint32_t beat_event_off_at_ms_{0};
+
+    // Frame-id counter: FFT task increments on every write so the main loop
+    // can consume each frame at most once (prevents double-publish of beat_event
+    // given the main-loop ~50Hz / FFT-task ~86Hz cadence mismatch).
+    uint32_t next_frame_id_{0};
+    uint32_t last_consumed_frame_id_{0};
+
     static constexpr uint8_t N_MEL = 32;
 
     // Pro-tier DSP blocks (owned; setup() initializes)
     MelFilterbank<N_MEL, FFT_SIZE> mel_fb_;
     MusicalBands musical_bands_;
     SuperFluxOnset<N_MEL> superflux_;
+    BTrack btrack_;
     // Per-frame state published to main loop via SharedFrame
 
     // Pre-allocated working buffers (heap/PSRAM via setup(), not FFT-task stack).
