@@ -147,6 +147,14 @@ sensor:
       name: "Beat Phase"
     onset_strength:
       name: "Onset Strength"
+    sub_bass_energy:
+      name: "Audio Sub Bass"
+    low_mid_energy:
+      name: "Audio Low Mid"
+    upper_mid_energy:
+      name: "Audio Upper Mid"
+    air_energy:
+      name: "Audio Air"
 
 binary_sensor:
   - platform: audio_reactive

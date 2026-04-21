@@ -16,7 +16,7 @@ void AudioReactiveComponent::setup() {
     ESP_LOGCONFIG(TAG, "Setting up AudioReactive...");
 
     // Allocate DSP pipeline
-    fft_ = new FFTProcessor<512>(sample_rate_);
+    fft_ = new FFTProcessor<FFT_SIZE>(sample_rate_);
     fft_buffer_ = new float[FFT_SIZE];
     whitened_mags_ = new float[FFT_SIZE / 2];
     band_agg_ = BandAggregator(sample_rate_, FFT_SIZE);
@@ -63,6 +63,18 @@ void AudioReactiveComponent::setup() {
     } else {
         ESP_LOGW(TAG, "No microphone assigned!");
     }
+
+#ifdef AUDIO_REACTIVE_PRO
+    // Pro-tier DSP initialization — must happen before the FFT task starts so it
+    // has valid mel_fb_ coefficients and a mags_sq_ buffer to write into.
+    // Uses default heap (in PSRAM on S3R via ESP-IDF allocator with SPIRAM_USE_MALLOC enabled).
+    mags_sq_ = new float[fft_->bin_count()]();
+    mel_fb_.setup(sample_rate_, 40.0f, 16000.0f);
+    musical_bands_.reset();
+    musical_bands_.set_noise_floors(cal_store_v2_.noise_floor);
+    ESP_LOGI(TAG, "Pro-tier DSP initialized: FFT=%u, N_MEL=%u, bands=%u",
+             FFT_SIZE, N_MEL, MusicalBands::kNumBands);
+#endif
 
     // Create FFT processing task pinned to core 0
     xTaskCreatePinnedToCore(fft_task_func, "FFT", 6144, this, 1, &fft_task_handle_, 0);
@@ -161,14 +173,17 @@ void AudioReactiveComponent::fft_task_func(void *param) {
         energies.centroid = spectral_centroid(magnitudes, self->fft_->bin_count(), self->band_agg_.hz_per_bin());
         energies.rolloff = spectral_rolloff(magnitudes, self->fft_->bin_count(), self->band_agg_.hz_per_bin());
 
+        size_t bins = self->fft_->bin_count();
+        float complex_onset = 0.0f;
+
+#ifndef AUDIO_REACTIVE_PRO
+        // Basic-tier complex-domain onset detection (replaced by SuperFlux in Chunk 4 on pro tier)
         // Whitened magnitudes for onset detection (original magnitudes used for band energies)
         float *whitened_mags = self->whitened_mags_;
-        size_t bins = self->fft_->bin_count();
         std::memcpy(whitened_mags, magnitudes, bins * sizeof(float));
         self->whitening_.process(whitened_mags, bins);
 
         // Complex domain onset using whitened magnitudes
-        float complex_onset = 0.0f;
         const float *phases = self->fft_->phases();
 
         if (self->has_prev_frame_) {
@@ -193,11 +208,25 @@ void AudioReactiveComponent::fft_task_func(void *param) {
         std::memcpy(self->prev_phases_, phases, bins * sizeof(float));
         std::memcpy(self->prev_magnitudes_, whitened_mags, bins * sizeof(float));
         self->has_prev_frame_ = true;
+#endif
+
+#ifdef AUDIO_REACTIVE_PRO
+        // Pro-tier: compute squared magnitudes into the pre-allocated class buffer
+        // (not stack — fft_task_func has only 6144 bytes of stack).
+        for (size_t i = 0; i < bins; i++) {
+            self->mags_sq_[i] = magnitudes[i] * magnitudes[i];
+        }
+#endif
 
         // Store result via double-buffer (no spinlock needed)
         int write_slot = self->shared_write_idx_ ^ 1;
         self->shared_frames_[write_slot].energies = energies;
         self->shared_frames_[write_slot].complex_onset = complex_onset;
+#ifdef AUDIO_REACTIVE_PRO
+        // Populate mel frame into the same write_slot — piggybacks on the existing
+        // atomic-index-swap double-buffer for synchronization.
+        self->mel_fb_.process(self->mags_sq_, self->shared_frames_[write_slot].mel_frame);
+#endif
         self->shared_write_idx_ = write_slot;
         self->new_data_available_ = true;
 
@@ -233,6 +262,13 @@ void AudioReactiveComponent::loop() {
     int read_slot = shared_write_idx_;
     BandEnergies16 energies = shared_frames_[read_slot].energies;
     float complex_onset = shared_frames_[read_slot].complex_onset;
+
+#ifdef AUDIO_REACTIVE_PRO
+    // Snapshot mel frame from the same read slot (copy is cheap at N_MEL=32)
+    // then run 7-band musical aggregation + per-band AGC + EMA smoothing.
+    float mel_frame_snapshot[N_MEL];
+    std::memcpy(mel_frame_snapshot, shared_frames_[read_slot].mel_frame, sizeof(mel_frame_snapshot));
+#endif
 
     last_process_ms_ = now;
 
@@ -289,6 +325,12 @@ void AudioReactiveComponent::loop() {
     for (int i = 0; i < 16; i++) scaled_bands[i] = energies.bands[i] * raw_scale_;
     auto onset_result = onset_det_->update(scaled_bands, smooth_bass_, now, complex_onset);
     if (beat_tracker_ != nullptr) beat_tracker_->process(onset_det_->last_onset_value());
+
+#ifdef AUDIO_REACTIVE_PRO
+    // Pro tier: compute 7 musical bands from the raw mel frame. Each band applies
+    // per-band AGC + asymmetric EMA smoothing internally.
+    musical_bands_.process(mel_frame_snapshot, musical_band_energies_);
+#endif
 
     publish_sensor_values_(now, energies, onset_result);
 }
@@ -369,9 +411,22 @@ void AudioReactiveComponent::accumulate_calibration_(uint32_t now, const BandEne
 
 void AudioReactiveComponent::publish_sensor_values_(uint32_t now, const BandEnergies16 &energies,
                                                      const OnsetDetector::OnsetResult &onset_result) {
+#ifndef AUDIO_REACTIVE_PRO
+    // Basic tier: publish bass/mid/high from band_aggregator output via smoothed EMA.
     if (bass_sensor_ != nullptr) bass_sensor_->publish_state(smooth_bass_);
     if (mid_sensor_ != nullptr) mid_sensor_->publish_state(smooth_mid_);
     if (high_sensor_ != nullptr) high_sensor_->publish_state(smooth_high_);
+#else
+    // Pro tier: publish 7 musical bands (bass/mid/high override basic-tier values).
+    // musical_band_energies_ is populated in loop() from the shared mel frame.
+    if (sub_bass_sensor_ != nullptr) sub_bass_sensor_->publish_state(musical_band_energies_[MusicalBands::SUB_BASS]);
+    if (bass_sensor_ != nullptr) bass_sensor_->publish_state(musical_band_energies_[MusicalBands::BASS]);
+    if (low_mid_sensor_ != nullptr) low_mid_sensor_->publish_state(musical_band_energies_[MusicalBands::LOW_MID]);
+    if (mid_sensor_ != nullptr) mid_sensor_->publish_state(musical_band_energies_[MusicalBands::MID]);
+    if (upper_mid_sensor_ != nullptr) upper_mid_sensor_->publish_state(musical_band_energies_[MusicalBands::UPPER_MID]);
+    if (high_sensor_ != nullptr) high_sensor_->publish_state(musical_band_energies_[MusicalBands::HIGH]);
+    if (air_sensor_ != nullptr) air_sensor_->publish_state(musical_band_energies_[MusicalBands::AIR]);
+#endif
     if (amplitude_sensor_ != nullptr) amplitude_sensor_->publish_state(smooth_amp_);
 
     if (centroid_sensor_ != nullptr) {
@@ -419,7 +474,9 @@ void AudioReactiveComponent::set_muted(bool muted) {
             mic_started_ = false;
         }
         ring_buffer_.clear();
+#ifndef AUDIO_REACTIVE_PRO
         has_prev_frame_ = false;
+#endif
         whitening_.reset();
 
         // Publish zeros for all sensors including BPM
@@ -670,10 +727,10 @@ void AudioReactiveComponent::apply_calibration() {
 
 #ifdef AUDIO_REACTIVE_PRO
 void AudioReactiveComponent::apply_calibration_v2_() {
-    // Chunk 2 fallback: delegate to the basic-tier apply_calibration() so the
-    // existing 4 AGCs (agc_bass_/mid_/high_/amp_) still receive noise floors
-    // from the V1-mirrored cal_store_. Chunk 3 replaces this with musical_bands
-    // 7-AGC wiring that reads cal_store_v2_.noise_floor[7] directly.
+    // Chunk 3: push per-musical-band noise floors directly into the 7 musical_bands AGCs.
+    musical_bands_.set_noise_floors(cal_store_v2_.noise_floor);
+    // Also invoke the basic-tier apply path so shared scalar state (raw_scale_,
+    // squelch threshold, basic-tier AGC floors mirrored from V2) stays in sync.
     apply_calibration();
 }
 #endif  // AUDIO_REACTIVE_PRO

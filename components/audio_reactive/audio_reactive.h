@@ -17,8 +17,8 @@
 
 #ifdef AUDIO_REACTIVE_PRO
 // Pro-tier DSP block includes — added progressively in later chunks.
-// #include "mel_filterbank.h"
-// #include "musical_bands.h"
+#include "mel_filterbank.h"
+#include "musical_bands.h"
 // #include "superflux_onset.h"
 // #include "btrack.h"
 #endif
@@ -157,6 +157,10 @@ class AudioReactiveComponent : public Component {
     void set_silence_binary_sensor(binary_sensor::BinarySensor *s) { silence_sensor_ = s; }
 #ifdef AUDIO_REACTIVE_PRO
     void set_calibration_stale_binary_sensor(binary_sensor::BinarySensor *s) { calibration_stale_sensor_ = s; }
+    void set_sub_bass_energy_sensor(sensor::Sensor *s) { sub_bass_sensor_ = s; }
+    void set_low_mid_energy_sensor(sensor::Sensor *s) { low_mid_sensor_ = s; }
+    void set_upper_mid_energy_sensor(sensor::Sensor *s) { upper_mid_sensor_ = s; }
+    void set_air_energy_sensor(sensor::Sensor *s) { air_sensor_ = s; }
 #endif
 
     // Platform entity setters
@@ -259,14 +263,21 @@ class AudioReactiveComponent : public Component {
 #endif
 
     // DSP pipeline — configurable parameters
+#ifdef AUDIO_REACTIVE_PRO
+    static constexpr uint16_t FFT_SIZE = 2048;
+    static constexpr uint16_t HOP_SIZE = 512;  // 75% overlap @ 86Hz frame rate (44.1kHz sample rate)
+    static constexpr uint16_t RING_BUFFER_SIZE = 4096;
+#else
     static constexpr uint16_t FFT_SIZE = 512;
     static constexpr uint16_t HOP_SIZE = FFT_SIZE / 4;  // 75% overlap
+    static constexpr uint16_t RING_BUFFER_SIZE = 1024;
+#endif
     float sample_rate_{22050.0f};
     bool debug_logging_{false};
 
-    // Ring buffer: 1024 floats (2x FFT window, sufficient for 512-point FFT + hop)
-    RingBuffer<float, 1024> ring_buffer_;
-    FFTProcessor<512> *fft_{nullptr};
+    // Ring buffer: tier-gated size (2x FFT window)
+    RingBuffer<float, RING_BUFFER_SIZE> ring_buffer_;
+    FFTProcessor<FFT_SIZE> *fft_{nullptr};
 
     // Heap-allocated working buffers for FFT task (avoids stack overflow)
     float *fft_buffer_{nullptr};       // FFT_SIZE floats
@@ -293,15 +304,22 @@ class AudioReactiveComponent : public Component {
     struct SharedFrame {
         BandEnergies16 energies{};
         float complex_onset{0.0f};
+#ifdef AUDIO_REACTIVE_PRO
+        // Raw (pre-log) mel-band energies. 32 matches N_MEL below (kept as a literal
+        // here because N_MEL is declared later in the pro-tier member block).
+        float mel_frame[32]{};
+#endif
     };
     SharedFrame shared_frames_[2]{};
     volatile int shared_write_idx_{0};   // FFT task writes to [write ^ 1], then flips
     volatile bool new_data_available_{false};
 
     // Complex domain onset: previous-frame state (heap members, not FFT task stack)
+#ifndef AUDIO_REACTIVE_PRO
     float prev_phases_[256]{};
     float prev_magnitudes_[256]{};
     bool has_prev_frame_{false};
+#endif
 
     // Smoothed values for asymmetric EMA
     float smooth_bass_{0.0f};
@@ -356,6 +374,26 @@ class AudioReactiveComponent : public Component {
 
     // Diagnostic binary sensor - exposed via binary_sensor.py
     binary_sensor::BinarySensor *calibration_stale_sensor_{nullptr};
+
+    static constexpr uint8_t N_MEL = 32;
+
+    // Pro-tier DSP blocks (owned; setup() initializes)
+    MelFilterbank<N_MEL, FFT_SIZE> mel_fb_;
+    MusicalBands musical_bands_;
+
+    // Pre-allocated working buffers (heap/PSRAM via setup(), not FFT-task stack).
+    // fft_task_func is a 6144-byte-stack pinned task; large per-frame buffers MUST
+    // be class members or heap-allocated, not stack-locals inside the task body.
+    float *mags_sq_{nullptr};        // FFT_SIZE/2 floats — squared magnitudes for mel input
+
+    // Pro-tier 7-band energies (written by main loop after AGC+EMA)
+    float musical_band_energies_[MusicalBands::kNumBands]{};
+
+    // Per-musical-band sensor pointers (published from main loop)
+    sensor::Sensor *sub_bass_sensor_{nullptr};
+    sensor::Sensor *low_mid_sensor_{nullptr};
+    sensor::Sensor *upper_mid_sensor_{nullptr};
+    sensor::Sensor *air_sensor_{nullptr};
 #endif  // AUDIO_REACTIVE_PRO
 };
 

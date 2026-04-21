@@ -7,7 +7,13 @@ from esphome.const import (
     STATE_CLASS_MEASUREMENT,
 )
 
-from . import AudioReactiveComponent, CONF_AUDIO_REACTIVE_ID
+from . import (
+    AudioReactiveComponent,
+    CONF_AUDIO_REACTIVE_ID,
+    resolve_tier_from_core,
+    DSP_TIER_PRO,
+)
+
 CONF_BASS_ENERGY = "bass_energy"
 CONF_MID_ENERGY = "mid_energy"
 CONF_HIGH_ENERGY = "high_energy"
@@ -18,6 +24,14 @@ CONF_ROLLOFF = "rolloff"
 CONF_BEAT_CONFIDENCE = "beat_confidence"
 CONF_BEAT_PHASE = "beat_phase"
 CONF_ONSET_STRENGTH = "onset_strength"
+
+# Pro-tier only: additional perceptual musical bands (sub-bass, low-mid, upper-mid, air).
+# bass/mid/high remain available on both tiers (basic = band-aggregator output,
+# pro = musical-bands output from mel filterbank).
+CONF_SUB_BASS_ENERGY = "sub_bass_energy"
+CONF_LOW_MID_ENERGY = "low_mid_energy"
+CONF_UPPER_MID_ENERGY = "upper_mid_energy"
+CONF_AIR_ENERGY = "air_energy"
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -73,8 +87,37 @@ CONFIG_SCHEMA = cv.Schema(
             icon="mdi:flash",
             state_class=STATE_CLASS_MEASUREMENT,
         ),
+        cv.Optional(CONF_SUB_BASS_ENERGY): sensor.sensor_schema(
+            accuracy_decimals=3,
+            icon="mdi:equalizer",
+            state_class=STATE_CLASS_MEASUREMENT,
+        ),
+        cv.Optional(CONF_LOW_MID_ENERGY): sensor.sensor_schema(
+            accuracy_decimals=3,
+            icon="mdi:equalizer",
+            state_class=STATE_CLASS_MEASUREMENT,
+        ),
+        cv.Optional(CONF_UPPER_MID_ENERGY): sensor.sensor_schema(
+            accuracy_decimals=3,
+            icon="mdi:equalizer",
+            state_class=STATE_CLASS_MEASUREMENT,
+        ),
+        cv.Optional(CONF_AIR_ENERGY): sensor.sensor_schema(
+            accuracy_decimals=3,
+            icon="mdi:equalizer",
+            state_class=STATE_CLASS_MEASUREMENT,
+        ),
     }
 )
+
+
+# Pro-only sensor keys — gated in to_code() via resolve_tier_from_core().
+_PRO_ONLY_KEYS = {
+    CONF_SUB_BASS_ENERGY,
+    CONF_LOW_MID_ENERGY,
+    CONF_UPPER_MID_ENERGY,
+    CONF_AIR_ENERGY,
+}
 
 
 async def to_code(config):
@@ -91,7 +134,18 @@ async def to_code(config):
         (CONF_BEAT_CONFIDENCE, "set_beat_confidence_sensor"),
         (CONF_BEAT_PHASE, "set_beat_phase_sensor"),
         (CONF_ONSET_STRENGTH, "set_onset_strength_sensor"),
+        (CONF_SUB_BASS_ENERGY, "set_sub_bass_energy_sensor"),
+        (CONF_LOW_MID_ENERGY, "set_low_mid_energy_sensor"),
+        (CONF_UPPER_MID_ENERGY, "set_upper_mid_energy_sensor"),
+        (CONF_AIR_ENERGY, "set_air_energy_sensor"),
     ]:
         if key in config:
+            if key in _PRO_ONLY_KEYS:
+                tier = resolve_tier_from_core()
+                if tier != DSP_TIER_PRO:
+                    raise cv.Invalid(
+                        f"sensor.{key} requires dsp_tier: pro. "
+                        f"This sensor is only available on ESP32-S3 + PSRAM boards."
+                    )
             sens = await sensor.new_sensor(config[key])
             cg.add(getattr(parent, setter)(sens))
