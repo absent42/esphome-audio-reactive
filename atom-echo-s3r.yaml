@@ -73,7 +73,6 @@ audio_reactive:
   update_interval: 50ms
   beat_sensitivity: 50
   squelch: 10
-  sample_rate: 44100
   fft_size: 512
   debug_logging: false
   on_mute_changed:
@@ -156,6 +155,9 @@ binary_sensor:
       name: "Audio Sensor"
     silence:
       name: "Silence"
+    calibration_stale:
+      name: "Audio Calibration Stale"
+      entity_category: diagnostic
   - platform: gpio
     pin:
       number: GPIO41

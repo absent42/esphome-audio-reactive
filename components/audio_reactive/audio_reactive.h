@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "esphome/core/defines.h"
+
 #include "ring_buffer.h"
 #include "fft_processor.h"
 #include "band_aggregator.h"
@@ -11,6 +13,15 @@
 #include "silence_detector.h"
 #include "dynamics_limiter.h"
 #include "spectral_whitening.h"
+#include "calibration_migration.h"
+
+#ifdef AUDIO_REACTIVE_PRO
+// Pro-tier DSP block includes — added progressively in later chunks.
+// #include "mel_filterbank.h"
+// #include "musical_bands.h"
+// #include "superflux_onset.h"
+// #include "btrack.h"
+#endif
 
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
@@ -40,18 +51,6 @@ class AudioReactiveDetectionModeSelect;
 
 /// Calibration state machine phases.
 enum CalibrationState { CAL_IDLE, CAL_QUIET, CAL_MUSIC };
-
-/// Persistent calibration data stored in NVS flash.
-struct CalibrationStore {
-    float squelch_threshold;    // From quiet cal: max_mid_high * 1.5
-    float noise_floor_bass;     // Pre-scaled quiet max bass
-    float noise_floor_mid;      // Pre-scaled quiet max mid
-    float noise_floor_high;     // Pre-scaled quiet max high
-    float noise_floor_amp;      // Pre-scaled quiet max amp
-    float raw_scale;            // From music cal: 0.5 / avg_amplitude
-    bool quiet_calibrated;
-    bool music_calibrated;
-};
 
 /// Number entity for runtime beat sensitivity adjustment.
 class AudioReactiveBeatSensitivityNumber : public number::Number, public Component {
@@ -156,6 +155,9 @@ class AudioReactiveComponent : public Component {
     // Binary sensor setters
     void set_onset_binary_sensor(binary_sensor::BinarySensor *s) { onset_sensor_ = s; }
     void set_silence_binary_sensor(binary_sensor::BinarySensor *s) { silence_sensor_ = s; }
+#ifdef AUDIO_REACTIVE_PRO
+    void set_calibration_stale_binary_sensor(binary_sensor::BinarySensor *s) { calibration_stale_sensor_ = s; }
+#endif
 
     // Platform entity setters
     void set_beat_sensitivity_number(AudioReactiveBeatSensitivityNumber *n) { beat_sensitivity_number_ = n; }
@@ -248,6 +250,13 @@ class AudioReactiveComponent : public Component {
     void finish_quiet_calibration();
     void finish_music_calibration();
     void apply_calibration();
+#ifdef AUDIO_REACTIVE_PRO
+    /// Pro-tier calibration application.
+    /// Chunk 2: delegates to basic-tier apply_calibration() as a fallback so the
+    /// 4 basic-tier AGCs still receive noise floors during the pro-tier transition.
+    /// Chunk 3: rewritten to wire musical_bands AGCs directly from cal_store_v2_.noise_floor[7].
+    void apply_calibration_v2_();
+#endif
 
     // DSP pipeline — configurable parameters
     static constexpr uint16_t FFT_SIZE = 512;
@@ -338,6 +347,16 @@ class AudioReactiveComponent : public Component {
         float alpha = (raw > prev) ? EMA_FAST_RISE : EMA_SLOW_FALL;
         return alpha * raw + (1.0f - alpha) * prev;
     }
+
+#ifdef AUDIO_REACTIVE_PRO
+    // Pro-tier calibration (V2 format, per-musical-band noise floors)
+    ESPPreferenceObject cal_pref_v2_;
+    CalibrationStoreV2 cal_store_v2_{2, {0, 0, 0}, 5.0f, {0, 0, 0, 0, 0, 0, 0}, 1.0f / 20.0f, false, false, {0, 0}};
+    bool cal_stale_{false};  // true if loaded from V1 migration or uncalibrated
+
+    // Diagnostic binary sensor - exposed via binary_sensor.py
+    binary_sensor::BinarySensor *calibration_stale_sensor_{nullptr};
+#endif  // AUDIO_REACTIVE_PRO
 };
 
 // Automation triggers (macro-generated — each class is structurally identical)

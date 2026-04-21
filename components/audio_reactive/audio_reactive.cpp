@@ -68,6 +68,47 @@ void AudioReactiveComponent::setup() {
     xTaskCreatePinnedToCore(fft_task_func, "FFT", 6144, this, 1, &fft_task_handle_, 0);
 
     // Load calibration from flash (NVS)
+#ifdef AUDIO_REACTIVE_PRO
+    // Pro tier: try V2 first, then V1 migration, then uncalibrated defaults.
+    cal_pref_v2_ = global_preferences->make_preference<CalibrationStoreV2>(fnv1_hash("audio_cal_v2"));
+    cal_pref_ = global_preferences->make_preference<CalibrationStore>(fnv1_hash("audio_cal"));
+    bool v2_loaded = cal_pref_v2_.load(&cal_store_v2_) && cal_store_v2_.version == 2;
+    // If a future V3 supersedes V2, insert the version bump migration here
+    // before declaring V2 usable.
+
+    if (v2_loaded) {
+        ESP_LOGI(TAG, "Loaded V2 calibration: quiet=%s music=%s scale=%.4f squelch_thresh=%.2f",
+                 cal_store_v2_.quiet_calibrated ? "yes" : "no",
+                 cal_store_v2_.music_calibrated ? "yes" : "no",
+                 cal_store_v2_.raw_scale, cal_store_v2_.squelch_threshold);
+        // Mirror V2 -> V1 for the Chunk 2 fallback apply path (so agc_bass_/mid_/high_ get non-zero floors).
+        cal_store_.squelch_threshold = cal_store_v2_.squelch_threshold;
+        cal_store_.noise_floor_bass = cal_store_v2_.noise_floor[1];   // bass
+        cal_store_.noise_floor_mid  = cal_store_v2_.noise_floor[3];   // mid
+        cal_store_.noise_floor_high = cal_store_v2_.noise_floor[5];   // high
+        cal_store_.noise_floor_amp  = (cal_store_v2_.noise_floor[1] + cal_store_v2_.noise_floor[3] + cal_store_v2_.noise_floor[5]) / 3.0f;
+        cal_store_.raw_scale = cal_store_v2_.raw_scale;
+        cal_store_.quiet_calibrated = cal_store_v2_.quiet_calibrated;
+        cal_store_.music_calibrated = cal_store_v2_.music_calibrated;
+        cal_stale_ = !(cal_store_v2_.quiet_calibrated && cal_store_v2_.music_calibrated);
+        apply_calibration_v2_();
+    } else if (cal_pref_.load(&cal_store_) && migrate_v1_to_v2(cal_store_, cal_store_v2_)) {
+        ESP_LOGW(TAG, "Migrated V1 calibration to V2 (linear-interpolated noise floors). "
+                     "calibration_stale=true - user should re-run calibration.");
+        cal_stale_ = true;
+        cal_pref_v2_.save(&cal_store_v2_);
+        apply_calibration_v2_();
+    } else {
+        ESP_LOGI(TAG, "No stored V2/V1 calibration - using uncalibrated defaults (calibration_stale=true)");
+        cal_store_v2_ = {2, {0, 0, 0}, 5.0f, {0, 0, 0, 0, 0, 0, 0}, 1.0f / 20.0f, false, false, {0, 0}};
+        cal_store_ = {5.0f, 0.25f, 0.08f, 0.03f, 0.10f, 1.0f / 20.0f, false, false};
+        cal_stale_ = true;
+    }
+    if (calibration_stale_sensor_ != nullptr) {
+        calibration_stale_sensor_->publish_state(cal_stale_);
+    }
+#else
+    // Basic tier: unchanged V1 load path.
     cal_pref_ = global_preferences->make_preference<CalibrationStore>(fnv1_hash("audio_cal"));
     if (cal_pref_.load(&cal_store_)) {
         ESP_LOGI(TAG, "Loaded calibration from flash: quiet=%s music=%s scale=%.4f squelch_thresh=%.2f",
@@ -79,6 +120,7 @@ void AudioReactiveComponent::setup() {
         ESP_LOGI(TAG, "No stored calibration — using defaults");
         cal_store_ = {5.0f, 0.25f, 0.08f, 0.03f, 0.10f, 1.0f / 20.0f, false, false};
     }
+#endif
 
     ESP_LOGI(TAG, "Initialized (FFT=%u, rate=%.0f, hop=%u, interval=%ums, sensitivity=%d, squelch=%.0f)",
              FFT_SIZE, sample_rate_, HOP_SIZE, update_interval_ms_, beat_sensitivity_, squelch_);
@@ -549,6 +591,19 @@ void AudioReactiveComponent::finish_quiet_calibration() {
     apply_calibration();
     cal_pref_.save(&cal_store_);
 
+#ifdef AUDIO_REACTIVE_PRO
+    // Chunk 3 will populate cal_store_v2_.noise_floor[7] from the musical_bands
+    // accumulator. For now, reuse the V1->V2 interpolation on the freshly-computed
+    // V1 values so next-boot V2 load has sensible per-band floors.
+    migrate_v1_to_v2(cal_store_, cal_store_v2_);
+    cal_store_v2_.quiet_calibrated = true;
+    cal_pref_v2_.save(&cal_store_v2_);
+    cal_stale_ = false;
+    if (calibration_stale_sensor_ != nullptr) {
+        calibration_stale_sensor_->publish_state(false);
+    }
+#endif
+
     ESP_LOGI(TAG, "Quiet calibration done: squelch_threshold=%.2f, noise_floors: bass=%.3f mid=%.3f high=%.3f amp=%.3f",
              cal_store_.squelch_threshold, cal_store_.noise_floor_bass,
              cal_store_.noise_floor_mid, cal_store_.noise_floor_high, cal_store_.noise_floor_amp);
@@ -579,6 +634,16 @@ void AudioReactiveComponent::finish_music_calibration() {
         apply_calibration();
         cal_pref_.save(&cal_store_);
 
+#ifdef AUDIO_REACTIVE_PRO
+        cal_store_v2_.raw_scale = cal_store_.raw_scale;
+        cal_store_v2_.music_calibrated = true;
+        cal_pref_v2_.save(&cal_store_v2_);
+        cal_stale_ = false;
+        if (calibration_stale_sensor_ != nullptr) {
+            calibration_stale_sensor_->publish_state(false);
+        }
+#endif
+
         ESP_LOGI(TAG, "Music calibration done: avg_amp=%.2f, raw_scale=%.4f",
                  avg_amp, cal_store_.raw_scale);
         on_music_calibration_complete_callbacks_.call();
@@ -602,6 +667,16 @@ void AudioReactiveComponent::apply_calibration() {
     // Reset AGC to start fresh with new settings
     reset_agc();
 }
+
+#ifdef AUDIO_REACTIVE_PRO
+void AudioReactiveComponent::apply_calibration_v2_() {
+    // Chunk 2 fallback: delegate to the basic-tier apply_calibration() so the
+    // existing 4 AGCs (agc_bass_/mid_/high_/amp_) still receive noise floors
+    // from the V1-mirrored cal_store_. Chunk 3 replaces this with musical_bands
+    // 7-AGC wiring that reads cal_store_v2_.noise_floor[7] directly.
+    apply_calibration();
+}
+#endif  // AUDIO_REACTIVE_PRO
 
 void AudioReactiveCalibrateQuietButton::press_action() {
     parent_->start_quiet_calibration();
