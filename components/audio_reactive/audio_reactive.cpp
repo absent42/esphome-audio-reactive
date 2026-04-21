@@ -174,9 +174,9 @@ void AudioReactiveComponent::fft_task_func(void *param) {
         energies.rolloff = spectral_rolloff(magnitudes, self->fft_->bin_count(), self->band_agg_.hz_per_bin());
 
         size_t bins = self->fft_->bin_count();
+#ifndef AUDIO_REACTIVE_PRO
         float complex_onset = 0.0f;
 
-#ifndef AUDIO_REACTIVE_PRO
         // Basic-tier complex-domain onset detection (replaced by SuperFlux in Chunk 4 on pro tier)
         // Whitened magnitudes for onset detection (original magnitudes used for band energies)
         float *whitened_mags = self->whitened_mags_;
@@ -221,11 +221,18 @@ void AudioReactiveComponent::fft_task_func(void *param) {
         // Store result via double-buffer (no spinlock needed)
         int write_slot = self->shared_write_idx_ ^ 1;
         self->shared_frames_[write_slot].energies = energies;
+#ifndef AUDIO_REACTIVE_PRO
         self->shared_frames_[write_slot].complex_onset = complex_onset;
+#endif
 #ifdef AUDIO_REACTIVE_PRO
         // Populate mel frame into the same write_slot — piggybacks on the existing
         // atomic-index-swap double-buffer for synchronization.
         self->mel_fb_.process(self->mags_sq_, self->shared_frames_[write_slot].mel_frame);
+        // SuperFlux must run after mel_frame is written and before the atomic publish
+        // below so readers see a consistent snapshot (mel + flux + event together).
+        auto sf = self->superflux_.process(self->shared_frames_[write_slot].mel_frame);
+        self->shared_frames_[write_slot].superflux_strength = sf.strength;
+        self->shared_frames_[write_slot].superflux_event = sf.event;
 #endif
         self->shared_write_idx_ = write_slot;
         self->new_data_available_ = true;
@@ -261,13 +268,19 @@ void AudioReactiveComponent::loop() {
     new_data_available_ = false;
     int read_slot = shared_write_idx_;
     BandEnergies16 energies = shared_frames_[read_slot].energies;
+#ifndef AUDIO_REACTIVE_PRO
     float complex_onset = shared_frames_[read_slot].complex_onset;
+#endif
 
 #ifdef AUDIO_REACTIVE_PRO
-    // Snapshot mel frame from the same read slot (copy is cheap at N_MEL=32)
-    // then run 7-band musical aggregation + per-band AGC + EMA smoothing.
+    // Snapshot mel frame + SuperFlux output from the same read slot (copy is cheap
+    // at N_MEL=32) so the 7-band aggregation and onset publish both see a consistent
+    // frame. Reading individual fields after this point risks tearing if the FFT task
+    // re-publishes mid-loop.
     float mel_frame_snapshot[N_MEL];
     std::memcpy(mel_frame_snapshot, shared_frames_[read_slot].mel_frame, sizeof(mel_frame_snapshot));
+    float sf_strength = shared_frames_[read_slot].superflux_strength;
+    bool sf_event = shared_frames_[read_slot].superflux_event;
 #endif
 
     last_process_ms_ = now;
@@ -292,6 +305,9 @@ void AudioReactiveComponent::loop() {
             if (beat_phase_sensor_ != nullptr) beat_phase_sensor_->publish_state(0.0f);
             if (onset_det_ != nullptr) onset_det_->reset();
             if (beat_tracker_ != nullptr) beat_tracker_->reset();
+#ifdef AUDIO_REACTIVE_PRO
+            superflux_.reset();
+#endif
         }
         if (silence_result.is_silent != prev_silence_) {
             if (silence_sensor_ != nullptr) silence_sensor_->publish_state(silence_result.is_silent);
@@ -320,16 +336,27 @@ void AudioReactiveComponent::loop() {
         limiter_.process(agc_amp_.process(scaled_amp), static_cast<float>(update_interval_ms_)),
         smooth_amp_);
 
-    // Onset detection using scaled 16-band energies
+    // Onset detection + beat tracking: basic-tier only. Pro tier uses SuperFlux
+    // (written by the FFT task) and, in Chunk 5, BTrack.
+    OnsetDetector::OnsetResult onset_result{};
+#ifndef AUDIO_REACTIVE_PRO
     float scaled_bands[16];
     for (int i = 0; i < 16; i++) scaled_bands[i] = energies.bands[i] * raw_scale_;
-    auto onset_result = onset_det_->update(scaled_bands, smooth_bass_, now, complex_onset);
+    onset_result = onset_det_->update(scaled_bands, smooth_bass_, now, complex_onset);
     if (beat_tracker_ != nullptr) beat_tracker_->process(onset_det_->last_onset_value());
+#endif
 
 #ifdef AUDIO_REACTIVE_PRO
     // Pro tier: compute 7 musical bands from the raw mel frame. Each band applies
     // per-band AGC + asymmetric EMA smoothing internally.
     musical_bands_.process(mel_frame_snapshot, musical_band_energies_);
+
+    // SuperFlux onset event: publish on event only (matches basic-tier cadence).
+    if (sf_event) {
+        if (onset_strength_sensor_ != nullptr) onset_strength_sensor_->publish_state(sf_strength);
+        if (onset_sensor_ != nullptr) onset_sensor_->publish_state(true);
+        onset_on_ms_ = now;
+    }
 #endif
 
     publish_sensor_values_(now, energies, onset_result);
@@ -438,6 +465,7 @@ void AudioReactiveComponent::publish_sensor_values_(uint32_t now, const BandEner
         rolloff_sensor_->publish_state((nyquist > 0.0f) ? (energies.rolloff / nyquist) : 0.0f);
     }
 
+#ifndef AUDIO_REACTIVE_PRO
     if (onset_result.detected) {
         if (onset_sensor_ != nullptr) { onset_sensor_->publish_state(true); onset_on_ms_ = now; }
         if (onset_strength_sensor_ != nullptr) onset_strength_sensor_->publish_state(onset_result.strength);
@@ -452,6 +480,12 @@ void AudioReactiveComponent::publish_sensor_values_(uint32_t now, const BandEner
         }
         last_bpm_publish_ms_ = now;
     }
+#else
+    // Pro tier: SuperFlux event-driven onset publish happens in loop() before this
+    // function runs. Beat tracking migrates to BTrack in Chunk 5 — for now, the
+    // bpm/confidence/phase sensors are simply not updated on pro tier.
+    (void)onset_result;
+#endif
 }
 
 void AudioReactiveComponent::publish_zeros_() {
@@ -483,6 +517,9 @@ void AudioReactiveComponent::set_muted(bool muted) {
         publish_zeros_();
         if (bpm_sensor_ != nullptr) bpm_sensor_->publish_state(0.0f);
         if (onset_det_ != nullptr) onset_det_->reset();
+#ifdef AUDIO_REACTIVE_PRO
+        superflux_.reset();
+#endif
 
         // Set silence on
         if (silence_sensor_ != nullptr) {
@@ -534,6 +571,9 @@ void AudioReactiveComponent::reset_agc() {
     if (beat_tracker_ != nullptr) {
         beat_tracker_->reset();
     }
+#ifdef AUDIO_REACTIVE_PRO
+    superflux_.reset();
+#endif
     limiter_.reset();
     smooth_bass_ = 0.0f;
     smooth_mid_ = 0.0f;

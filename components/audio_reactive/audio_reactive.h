@@ -19,7 +19,7 @@
 // Pro-tier DSP block includes — added progressively in later chunks.
 #include "mel_filterbank.h"
 #include "musical_bands.h"
-// #include "superflux_onset.h"
+#include "superflux_onset.h"
 // #include "btrack.h"
 #endif
 
@@ -308,6 +308,8 @@ class AudioReactiveComponent : public Component {
         // Raw (pre-log) mel-band energies. 32 matches N_MEL below (kept as a literal
         // here because N_MEL is declared later in the pro-tier member block).
         float mel_frame[32]{};
+        float superflux_strength{0.0f};
+        bool superflux_event{false};
 #endif
     };
     SharedFrame shared_frames_[2]{};
@@ -380,6 +382,8 @@ class AudioReactiveComponent : public Component {
     // Pro-tier DSP blocks (owned; setup() initializes)
     MelFilterbank<N_MEL, FFT_SIZE> mel_fb_;
     MusicalBands musical_bands_;
+    SuperFluxOnset<N_MEL> superflux_;
+    // Per-frame state published to main loop via SharedFrame
 
     // Pre-allocated working buffers (heap/PSRAM via setup(), not FFT-task stack).
     // fft_task_func is a 6144-byte-stack pinned task; large per-frame buffers MUST
