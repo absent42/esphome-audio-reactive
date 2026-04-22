@@ -79,6 +79,59 @@ A compact development kit with a built-in screen, battery, and PDM microphone.
 | **Size** | 54 x 25 x 16mm |
 | **Where to buy** | [M5Stack store](https://shop.m5stack.com/products/m5stickc-plus2-esp32-mini-iot-development-kit), [Pi Hut](https://thepihut.com/products/m5stickc-plus2-esp32-mini-iot-development-kit), [Amazon US](https://amzn.to/470ydYE), [Amazon UK](https://amzn.to/4brZ0i4), [Amazon DE](https://amzn.to/3PZFwde), [Amazon FR](https://amzn.to/4uM3Dwh), [Amazon IT](https://amzn.to/4c3nJdU), [AliExpress](https://s.click.aliexpress.com/e/_c3liKXJr) |
 
+## DSP Tiers
+
+Starting in v0.4.0 the component ships two DSP pipelines. The tier resolves
+automatically from the board's hardware at compile time - no YAML changes are
+needed unless you want to override the default.
+
+| Board | SoC | PSRAM | Tier | FFT | Sample rate | Beat tracker | Onset detector | Bands |
+|-------|-----|-------|------|-----|-------------|--------------|----------------|-------|
+| M5 ATOM Echo (original) | ESP32-PICO-D4 | none | Basic | 512-pt | 22.05 kHz | Autocorrelation | Complex-domain | 3 (bass / mid / high) |
+| M5StickC Plus2 | ESP32-PICO-V3-02 | none | Basic | 512-pt | 22.05 kHz | Autocorrelation | Complex-domain | 3 (bass / mid / high) |
+| M5 ATOM Echo S3R | ESP32-S3 | 8 MB octal | Pro | 2048-pt | 44.1 kHz | BTrack (comb + Viterbi + DP) | SuperFlux | 7 musical (sub_bass, bass, low_mid, mid, upper_mid, high, air) |
+| Waveshare ESP32-S3 Audio | ESP32-S3 | 8 MB octal | Pro | 2048-pt | 44.1 kHz | BTrack (comb + Viterbi + DP) | SuperFlux | 7 musical (sub_bass, bass, low_mid, mid, upper_mid, high, air) |
+
+Tier auto-detection requires both ESP32-S3 and a top-level `psram:` block in
+your YAML. Override with `dsp_tier: basic | pro | auto` (default `auto`).
+Declaring `pro` on non-S3 or no-PSRAM hardware fails validation at codegen
+with an actionable error, as does a `microphone.sample_rate` that does not
+match the resolved tier.
+
+### Additional pro-tier entities
+
+The pro tier exposes extra sensors on top of everything the basic tier
+already publishes:
+
+| Entity | Type | Description |
+|--------|------|-------------|
+| Sub Bass Energy | sensor (0-1) | ~20-60 Hz - subwoofer / kick drum fundamental |
+| Low Mid Energy | sensor (0-1) | ~250-500 Hz - vocal warmth, bass guitar body |
+| Upper Mid Energy | sensor (0-1) | ~2-4 kHz - vocal clarity, snare crack |
+| Air Energy | sensor (0-1) | ~8-16 kHz - cymbals, sibilance, sparkle |
+| Beat Event | binary_sensor | Pulses 30ms on every BTrack beat boundary |
+| Audio Calibration Stale | binary_sensor (diagnostic) | On when calibration is missing or was migrated from a V1 store |
+| FFT Task Cycle (mean) | sensor (us) | Opt-in performance diagnostic, available on both tiers |
+| FFT Task Cycle (peak) | sensor (us) | Opt-in performance diagnostic, available on both tiers |
+
+All four pro-tier energy sensors and the two pro-tier binary sensors are
+opt-in: declare them in your YAML only if you need them. The FFT task cycle
+sensors are opt-in on both tiers - if you don't declare them, the
+instrumentation is compiled out entirely and has zero runtime cost.
+
+### Upgrading from v0.3.x
+
+- **Classic ESP32 users (ATOM Echo, M5StickC Plus2):** no change. The basic
+  pipeline matches v0.3.x behaviour. If you had `audio_reactive.sample_rate:
+  22050` explicitly set, remove the line - sample rate is now tier-driven.
+- **ESP32-S3 users (S3R, Waveshare):** re-flash auto-upgrades to the pro
+  pipeline. Existing V1 calibration data migrates to the V2 seven-band layout
+  by linear interpolation as a stopgap, and the new `Audio Calibration Stale`
+  diagnostic binary sensor flips on. Run quiet-room calibration followed by
+  music-level calibration to produce a proper V2 calibration and clear the
+  diagnostic. If you had `audio_reactive.sample_rate: 44100` explicitly set,
+  remove the line.
+
 ## Installation
 
 ### One-click install (recommended)

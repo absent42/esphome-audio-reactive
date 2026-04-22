@@ -53,7 +53,60 @@
     </p>
 
     <p>
-        Current version: <strong>v0.3.1</strong>
+        Current version: <strong>v0.4.0</strong>
+    </p>
+
+    <h2>DSP tiers: basic vs pro</h2>
+    <p>
+        Firmware auto-selects one of two DSP pipelines based on the board's hardware.
+        The <strong>basic</strong> tier runs on the original ESP32 (ATOM Echo,
+        M5StickC Plus2): 512-point FFT at 22kHz, autocorrelation beat tracker,
+        complex-domain onset detector, 3 frequency bands (bass/mid/high). The
+        <strong>pro</strong> tier runs on ESP32-S3 + PSRAM boards (ATOM Echo S3R,
+        Waveshare ESP32-S3 Audio): 2048-point FFT at 44.1kHz, BTrack dynamic-programming
+        beat tracker, SuperFlux onset detector, and 7 musical bands
+        (sub_bass, bass, low_mid, mid, upper_mid, high, air) plus a calibration-stale
+        diagnostic. See the
+        <a href="https://github.com/absent42/esphome-audio-reactive#dsp-tiers">README</a>
+        for the full capability matrix.
+    </p>
+
+    <table style="border-collapse: collapse; width: 100%; font-size: 0.9rem;">
+        <thead>
+            <tr style="background: #f5f5f5;">
+                <th style="border: 1px solid #ddd; padding: 0.4rem 0.6rem; text-align: left;">Board</th>
+                <th style="border: 1px solid #ddd; padding: 0.4rem 0.6rem; text-align: left;">SoC</th>
+                <th style="border: 1px solid #ddd; padding: 0.4rem 0.6rem; text-align: left;">Tier</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td style="border: 1px solid #ddd; padding: 0.4rem 0.6rem;">M5 ATOM Echo</td>
+                <td style="border: 1px solid #ddd; padding: 0.4rem 0.6rem;">ESP32</td>
+                <td style="border: 1px solid #ddd; padding: 0.4rem 0.6rem;">Basic</td>
+            </tr>
+            <tr>
+                <td style="border: 1px solid #ddd; padding: 0.4rem 0.6rem;">M5StickC Plus2</td>
+                <td style="border: 1px solid #ddd; padding: 0.4rem 0.6rem;">ESP32-PICO-V3-02</td>
+                <td style="border: 1px solid #ddd; padding: 0.4rem 0.6rem;">Basic</td>
+            </tr>
+            <tr>
+                <td style="border: 1px solid #ddd; padding: 0.4rem 0.6rem;">M5 ATOM Echo S3R</td>
+                <td style="border: 1px solid #ddd; padding: 0.4rem 0.6rem;">ESP32-S3 + 8MB PSRAM</td>
+                <td style="border: 1px solid #ddd; padding: 0.4rem 0.6rem;">Pro</td>
+            </tr>
+            <tr>
+                <td style="border: 1px solid #ddd; padding: 0.4rem 0.6rem;">Waveshare ESP32-S3 Audio</td>
+                <td style="border: 1px solid #ddd; padding: 0.4rem 0.6rem;">ESP32-S3 + 8MB PSRAM</td>
+                <td style="border: 1px solid #ddd; padding: 0.4rem 0.6rem;">Pro</td>
+            </tr>
+        </tbody>
+    </table>
+    <p style="font-size: 0.85rem; color: #666;">
+        Existing S3 devices auto-upgrade to the pro pipeline on flash. The first boot
+        after upgrade exposes a <em>Calibration Stale</em> diagnostic (on until you
+        re-run quiet-room + music calibration) and linearly interpolates V1 calibration
+        data as a stopgap.
     </p>
 
     <div class="device-card">
