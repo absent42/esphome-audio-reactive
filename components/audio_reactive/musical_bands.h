@@ -20,10 +20,13 @@
 // real AGC class even under native test (e.g. test_e2e_pro_pipeline, where
 // AGC dynamics are exactly what we want to exercise).
 enum AGCMode { AGC_NORMAL };
+struct AGCPreset {};  // tag-only; the stub doesn't actually use its fields.
+inline constexpr AGCPreset AGC_FAST{};
 struct AGC_Stub {
     AGC_Stub(AGCMode mode = AGC_NORMAL) { (void) mode; }
     float noise_floor{0.0f};
     void set_noise_floor(float n) { noise_floor = n; }
+    void set_preset(AGCPreset) {}  // no-op — stub has no PI state.
     float process(float input) { return input; }  // passthrough
     void reset() {}
 };
@@ -66,6 +69,13 @@ class MusicalBands {
     using AGCType = AGC;
 #endif
 
+    /// Default constructor — applies AGC_FAST to each per-band AGC so callers
+    /// that construct MusicalBands without first calling reset() (e.g. native
+    /// test fixtures) still get the tier-appropriate preset on frame 1.
+    MusicalBands() {
+        for (auto &a : agcs_) a.set_preset(AGC_FAST);
+    }
+
     /// Compute the 7-band energies from a 32-band RAW (pre-log) mel frame.
     /// Input: N_MEL = 32 raw energies (NOT log-compressed).
     /// Output: 7 normalized band energies in [0, 1].
@@ -95,8 +105,16 @@ class MusicalBands {
     }
 
     /// Reset all AGC states and smoothing history.
+    /// Also (re-)applies the AGC_FAST preset to each per-band AGC. AGC_FAST
+    /// is tuned for raw mel-sum inputs; the default AGC_NORMAL preset's
+    /// 71-second time constant is unsuitable for that domain — the AGC
+    /// would spend minutes in its wind-up transient before reaching steady
+    /// state, manifesting as either band saturation or under-amplification
+    /// during the entire transient window.
     void reset() {
-        for (auto &a : agcs_) a.reset();
+        for (auto &a : agcs_) {
+            a.set_preset(AGC_FAST);  // implicitly resets gain/integrator state
+        }
         for (auto &s : smoothed_) s = 0.0f;
     }
 
