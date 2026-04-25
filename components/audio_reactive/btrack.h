@@ -221,9 +221,14 @@ inline BTrack::Result BTrack::process(float onset_strength) {
         update_tempo_estimate_();
     }
 
-    // Fast-path silence override.
+    // Fast-path silence override. Reset current_bpm_ to the prior so a stale
+    // pre-silence lock isn't fed back to publish-side consumers, and so the
+    // next non-silent window starts tempo induction without that lock biasing
+    // the comb-filterbank weighting toward the previous answer.
     if (zero_onset_streak_ >= kSilenceHoldFrames) {
         current_confidence_ = 0.0f;
+        current_bpm_ = kBpmPriorCenter;
+        beat_period_frames_val_ = kFrameHz * 60.0f / kBpmPriorCenter;
     }
 
     // Advance beat phase. During a strong DP lock we align the phase with the

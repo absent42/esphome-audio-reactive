@@ -264,6 +264,13 @@ class AudioReactiveComponent : public Component {
     uint32_t cal_quiet_count_{0};
     uint32_t cal_sample_count_{0};
     float raw_scale_{1.0f / 20.0f};
+#ifdef AUDIO_REACTIVE_PRO
+    // Pro-tier quiet-calibration accumulator — sums of raw mel-band energies
+    // across the same kMelStart/kMelEnd ranges that MusicalBands::process() uses.
+    // Captured in the AGC's input domain (raw, un-scaled) so the resulting
+    // mean × 1.5 noise floors match what the per-band AGCs see at runtime.
+    float cal_sum_mel_band_[MusicalBands::kNumBands]{};
+#endif
 
     void finish_quiet_calibration();
     void finish_music_calibration();

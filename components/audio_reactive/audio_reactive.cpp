@@ -407,6 +407,20 @@ void AudioReactiveComponent::loop() {
 #endif
 
 #ifdef AUDIO_REACTIVE_PRO
+    // Quiet-calibration accumulator: capture raw per-musical-band sums in the
+    // same domain the AGCs see (sum of raw mel slots, no scaling). Computed
+    // BEFORE musical_bands_.process() so the floors derived from these means
+    // match the AGC input scale.
+    if (cal_state_ == CAL_QUIET) {
+        for (uint8_t m = 0; m < MusicalBands::kNumBands; m++) {
+            float band_sum = 0.0f;
+            for (uint8_t i = MusicalBands::kMelStart[m]; i < MusicalBands::kMelEnd[m]; i++) {
+                band_sum += mel_frame_snapshot[i];
+            }
+            cal_sum_mel_band_[m] += band_sum;
+        }
+    }
+
     // Pro tier: compute 7 musical bands from the raw mel frame. Each band applies
     // per-band AGC + asymmetric EMA smoothing internally.
     musical_bands_.process(mel_frame_snapshot, musical_band_energies_);
@@ -420,8 +434,15 @@ void AudioReactiveComponent::loop() {
 
     // BTrack publish: BPM cadence-limited (every 3s like basic-tier), phase/confidence
     // every loop iteration, beat_event pulsed for 30ms on a new frame only.
+    // BPM publish is gated on confidence: BTrack preserves current_bpm_ across
+    // silence/no-signal windows, so an un-gated publish would expose a stale
+    // value as if it were a live tempo. Below kSilenceConfidence we publish 0
+    // to mark the sensor as "no tempo lock".
     if ((now - last_bpm_publish_ms_) >= BPM_PUBLISH_INTERVAL_MS) {
-        if (bpm_sensor_ != nullptr) bpm_sensor_->publish_state(bt_bpm);
+        if (bpm_sensor_ != nullptr) {
+            float reported_bpm = (bt_confidence >= BTrack::kSilenceConfidence) ? bt_bpm : 0.0f;
+            bpm_sensor_->publish_state(reported_bpm);
+        }
         last_bpm_publish_ms_ = now;
     }
     if (beat_phase_sensor_ != nullptr) beat_phase_sensor_->publish_state(bt_phase);
@@ -734,6 +755,9 @@ void AudioReactiveComponent::start_quiet_calibration() {
     cal_sum_high_ = 0;
     cal_sum_amp_quiet_ = 0;
     cal_quiet_count_ = 0;
+#ifdef AUDIO_REACTIVE_PRO
+    for (uint8_t m = 0; m < MusicalBands::kNumBands; m++) cal_sum_mel_band_[m] = 0.0f;
+#endif
     ESP_LOGI(TAG, "Quiet room calibration started (3 seconds)...");
     on_quiet_calibration_started_callbacks_.call();
 }
@@ -764,21 +788,43 @@ void AudioReactiveComponent::finish_quiet_calibration() {
     }
     cal_store_.quiet_calibrated = true;
 
-    // Apply and save
-    apply_calibration();
-    cal_pref_.save(&cal_store_);
-
 #ifdef AUDIO_REACTIVE_PRO
-    // Reuse the V1->V2 interpolation on the freshly-computed V1 values so the
-    // V2 store gets sensible per-musical-band floors. A dedicated per-band
-    // accumulator during quiet calibration is a possible future refinement.
-    migrate_v1_to_v2(cal_store_, cal_store_v2_);
+    // Pro tier: compute V2 noise floors directly from the per-musical-band sums
+    // accumulated during the quiet window. These are in the same domain the
+    // musical_bands_ AGCs see (raw mel-slot sums, un-scaled by raw_scale_),
+    // so floor = mean × 1.5 gives a correct per-band suppression threshold.
+    // The V1->V2 interpolation path is reserved for the boot-time fallback when
+    // only a legacy V1 NVS store exists; a fresh quiet calibration always uses
+    // direct per-band measurement.
+    if (cal_quiet_count_ > 0) {
+        for (uint8_t m = 0; m < MusicalBands::kNumBands; m++) {
+            float mean = cal_sum_mel_band_[m] / static_cast<float>(cal_quiet_count_);
+            cal_store_v2_.noise_floor[m] = mean * 1.5f;
+        }
+    }
+    // squelch_threshold is consumed by silence_det_ on basic-tier energies
+    // (mid + high), so the V1-domain value is the right scale here.
+    cal_store_v2_.squelch_threshold = cal_store_.squelch_threshold;
     cal_store_v2_.quiet_calibrated = true;
+
+    // apply_calibration_v2_() pushes V2 floors into musical_bands_ AND calls
+    // apply_calibration() to sync basic-tier scalar state. Single call replaces
+    // the basic-tier-only apply path used for non-pro builds.
+    apply_calibration_v2_();
+    cal_pref_.save(&cal_store_);
     cal_pref_v2_.save(&cal_store_v2_);
     cal_stale_ = false;
     if (calibration_stale_sensor_ != nullptr) {
         calibration_stale_sensor_->publish_state(false);
     }
+    ESP_LOGI(TAG, "V2 noise floors: sub_bass=%.3f bass=%.3f low_mid=%.3f mid=%.3f upper_mid=%.3f high=%.3f air=%.3f",
+             cal_store_v2_.noise_floor[0], cal_store_v2_.noise_floor[1],
+             cal_store_v2_.noise_floor[2], cal_store_v2_.noise_floor[3],
+             cal_store_v2_.noise_floor[4], cal_store_v2_.noise_floor[5],
+             cal_store_v2_.noise_floor[6]);
+#else
+    apply_calibration();
+    cal_pref_.save(&cal_store_);
 #endif
 
     ESP_LOGI(TAG, "Quiet calibration done: squelch_threshold=%.2f, noise_floors: bass=%.3f mid=%.3f high=%.3f amp=%.3f",
