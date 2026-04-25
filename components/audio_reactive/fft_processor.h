@@ -6,7 +6,18 @@
 #ifdef AUDIO_REACTIVE_NATIVE_TEST
 #include "../../test/third_party/kissfft.h"
 #else
+// arduinoFFT's defs.h #defines DDR(x) as ((x)-1) for AVR-ish "data direction
+// register" math. ESP-IDF's xtensa specreg.h #defines DDR as 104 (debug-data
+// register address). When both headers land in the same translation unit
+// (esphome.h pulls FreeRTOS->xtensa, then audio_reactive.h pulls arduinoFFT)
+// the DDR redefinition emits two warnings per compile. Save / undef the
+// xtensa macro before including arduinoFFT, then restore after — arduinoFFT's
+// DDR ends up shadowed by the restored xtensa macro, and nobody downstream
+// sees the redefinition.
+#pragma push_macro("DDR")
+#undef DDR
 #include <arduinoFFT.h>
+#pragma pop_macro("DDR")
 #endif
 
 namespace esphome {

@@ -103,7 +103,12 @@ class MusicalBands {
     const AGCType &agc(uint8_t band) const { return agcs_[band]; }
 
  protected:
-    AGCType agcs_[kNumBands]{};
+    // Note: no `{}` brace-init on agcs_. AGC's only constructor is marked
+    // `explicit AGC(AGCPreset = AGC_NORMAL)`, and value-init via `{}` would
+    // emit a "converting from initializer list" warning on every translation
+    // unit that includes this header. Default-init (no braces) still calls
+    // the default constructor, just without the warning.
+    AGCType agcs_[kNumBands];
     float smoothed_[kNumBands]{};
 };
 
