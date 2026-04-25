@@ -443,6 +443,32 @@ void AudioReactiveComponent::loop() {
     // return path, so it runs even during the silent calibration window.)
     musical_bands_.process(mel_frame_snapshot, musical_band_energies_);
 
+    // Pro-tier debug-logging instrumentation. Populates per-iteration metrics
+    // for the 2-second log dump in process_debug_logging_(). Cheap when
+    // debug_logging_ is false (single bool branch). When enabled it records
+    // raw mel sums (in the AGC's input domain), band-sensor min/max ranges,
+    // BTrack and SuperFlux state — enough to verify the AGC saturation and
+    // BPM-lock hypotheses on real hardware without device-side instrumentation.
+    if (debug_logging_) {
+        for (uint8_t b = 0; b < MusicalBands::kNumBands; b++) {
+            float raw_sum = 0.0f;
+            for (uint8_t i = MusicalBands::kMelStart[b]; i < MusicalBands::kMelEnd[b]; i++) {
+                raw_sum += mel_frame_snapshot[i];
+            }
+            pro_debug_metrics_.raw_mel_sum[b] = raw_sum;
+            float v = musical_band_energies_[b];
+            if (v > pro_debug_metrics_.band_max[b]) pro_debug_metrics_.band_max[b] = v;
+            if (v < pro_debug_metrics_.band_min[b] || pro_debug_metrics_.band_min[b] == 0.0f) {
+                pro_debug_metrics_.band_min[b] = v;
+            }
+        }
+        pro_debug_metrics_.btrack_bpm = bt_bpm;
+        pro_debug_metrics_.btrack_confidence = bt_confidence;
+        if (sf_strength > pro_debug_metrics_.superflux_strength_max) {
+            pro_debug_metrics_.superflux_strength_max = sf_strength;
+        }
+    }
+
     // SuperFlux onset event: publish on event only (matches basic-tier cadence).
     if (sf_event) {
         if (onset_strength_sensor_ != nullptr) onset_strength_sensor_->publish_state(sf_strength);
@@ -523,6 +549,43 @@ void AudioReactiveComponent::process_debug_logging_(uint32_t now, const BandEner
 
     raw_amp_min = 1e10f; raw_amp_max = 0.0f;
     raw_bass_min = 1e10f; raw_bass_max = 0.0f;
+
+#ifdef AUDIO_REACTIVE_PRO
+    ESP_LOGI(TAG, "=== PRO DEBUG ===");
+    ESP_LOGI(TAG, "Raw mel sums: low_bass=%.5f bass=%.5f low_mid=%.5f mid=%.5f upper_mid=%.5f high=%.5f air=%.5f",
+             pro_debug_metrics_.raw_mel_sum[0], pro_debug_metrics_.raw_mel_sum[1],
+             pro_debug_metrics_.raw_mel_sum[2], pro_debug_metrics_.raw_mel_sum[3],
+             pro_debug_metrics_.raw_mel_sum[4], pro_debug_metrics_.raw_mel_sum[5],
+             pro_debug_metrics_.raw_mel_sum[6]);
+    ESP_LOGI(TAG, "Band sensors (2s range): low_bass=[%.3f..%.3f] bass=[%.3f..%.3f] low_mid=[%.3f..%.3f] mid=[%.3f..%.3f] upper_mid=[%.3f..%.3f] high=[%.3f..%.3f] air=[%.3f..%.3f]",
+             pro_debug_metrics_.band_min[0], pro_debug_metrics_.band_max[0],
+             pro_debug_metrics_.band_min[1], pro_debug_metrics_.band_max[1],
+             pro_debug_metrics_.band_min[2], pro_debug_metrics_.band_max[2],
+             pro_debug_metrics_.band_min[3], pro_debug_metrics_.band_max[3],
+             pro_debug_metrics_.band_min[4], pro_debug_metrics_.band_max[4],
+             pro_debug_metrics_.band_min[5], pro_debug_metrics_.band_max[5],
+             pro_debug_metrics_.band_min[6], pro_debug_metrics_.band_max[6]);
+    ESP_LOGI(TAG, "Per-band AGC gain: low_bass=%.2f bass=%.2f low_mid=%.2f mid=%.2f upper_mid=%.2f high=%.2f air=%.2f",
+             musical_bands_.agc(0).current_gain(), musical_bands_.agc(1).current_gain(),
+             musical_bands_.agc(2).current_gain(), musical_bands_.agc(3).current_gain(),
+             musical_bands_.agc(4).current_gain(), musical_bands_.agc(5).current_gain(),
+             musical_bands_.agc(6).current_gain());
+    ESP_LOGI(TAG, "V2 noise floors: low_bass=%.4f bass=%.4f low_mid=%.4f mid=%.4f upper_mid=%.4f high=%.4f air=%.4f",
+             cal_store_v2_.noise_floor[0], cal_store_v2_.noise_floor[1],
+             cal_store_v2_.noise_floor[2], cal_store_v2_.noise_floor[3],
+             cal_store_v2_.noise_floor[4], cal_store_v2_.noise_floor[5],
+             cal_store_v2_.noise_floor[6]);
+    ESP_LOGI(TAG, "BTrack: bpm=%.1f confidence=%.3f | SuperFlux peak strength (2s): %.4f",
+             pro_debug_metrics_.btrack_bpm, pro_debug_metrics_.btrack_confidence,
+             pro_debug_metrics_.superflux_strength_max);
+    // Reset the 2-second-window aggregates for the next interval.
+    for (uint8_t b = 0; b < MusicalBands::kNumBands; b++) {
+        pro_debug_metrics_.band_min[b] = 0.0f;
+        pro_debug_metrics_.band_max[b] = 0.0f;
+    }
+    pro_debug_metrics_.superflux_strength_max = 0.0f;
+#endif
+
     last_debug_ms = now;
 }
 

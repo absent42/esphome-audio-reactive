@@ -435,6 +435,20 @@ class AudioReactiveComponent : public Component {
     sensor::Sensor *low_mid_sensor_{nullptr};
     sensor::Sensor *upper_mid_sensor_{nullptr};
     sensor::Sensor *air_sensor_{nullptr};
+
+    // Pro-tier debug metrics — populated only when debug_logging_ is true.
+    // Captured once per main-loop iteration and dumped every 2 s by
+    // process_debug_logging_(). Intended for hardware-side ground-truth
+    // diagnosis of the AGC saturation / BPM stuck symptoms documented in
+    // docs/plans/audio-pro-dsp-fixes-audit.md.
+    struct ProDebugMetrics {
+        float raw_mel_sum[MusicalBands::kNumBands]{};
+        float band_min[MusicalBands::kNumBands]{};
+        float band_max[MusicalBands::kNumBands]{};
+        float btrack_bpm{0};
+        float btrack_confidence{0};
+        float superflux_strength_max{0};  // peak strength over the 2 s window
+    } pro_debug_metrics_;
 #endif  // AUDIO_REACTIVE_PRO
 };
 
