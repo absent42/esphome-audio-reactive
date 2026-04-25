@@ -54,6 +54,17 @@ class BTrack {
     static constexpr uint16_t kTempoCandidates = 41;   // reference uses 41 candidate tempi
     static constexpr float   kRayleighParameter = 43.0f;   // peak of Rayleigh ~ 120 BPM @ 86 Hz
     static constexpr float   kTempoSigma = 41.0f / 8.0f;   // stddev for tempo transition matrix
+    // Width of the INITIAL prior Gaussian (in candidate-index units) when
+    // Viterbi state is seeded at boot, on reset, or when the comb FB
+    // collapses to silence-noise. Deliberately much wider than kTempoSigma
+    // so the initial bias toward 120 BPM (i=20) doesn't drown out
+    // observations for tempos far from 120. With kTempoSigma's value (5.125)
+    // an actual 146 BPM song (i=33, dist 13 from centre) would start with
+    // ~21x lower weight than 114 BPM (i=17, dist 3), and the comb-filter-
+    // bank observation has to overcome that 21x bias before Viterbi flips —
+    // in practice the lock on 114 wins. With kInitialPriorSigma=15 the
+    // ratio drops to ~2x, leaving observations to determine the lock.
+    static constexpr float   kInitialPriorSigma = 15.0f;
     static constexpr float   kTightness = 5.0f;            // log-gaussian tightness (reference: 5)
     static constexpr float   kAlpha = 0.9f;                // cumulative-score past/present blend
 
@@ -178,9 +189,12 @@ inline void BTrack::init_tempo_tables_() {
         }
     }
     // Seed prior as centred Gaussian on the 120-BPM candidate (index 20 for 41 cands).
+    // Uses kInitialPriorSigma (much wider than kTempoSigma) so the initial bias
+    // toward 120 BPM doesn't drown out observations for tempos far from 120 —
+    // see kInitialPriorSigma's docstring for the math.
     for (uint16_t i = 0; i < kTempoCandidates; i++) {
         float diff = static_cast<float>(i) - 20.0f;
-        prev_delta_[i] = expf(-0.5f * (diff * diff) / (kTempoSigma * kTempoSigma));
+        prev_delta_[i] = expf(-0.5f * (diff * diff) / (kInitialPriorSigma * kInitialPriorSigma));
     }
     tempo_tables_init_ = true;
 }
@@ -202,10 +216,12 @@ inline void BTrack::reset() {
     time_to_next_beat_ = -1;
     time_to_next_prediction_ = 10;
     if (!tempo_tables_init_) init_tempo_tables_();
-    // Reset Viterbi prior
+    // Reset Viterbi prior using the wider kInitialPriorSigma so any tempo
+    // can lock from observations without fighting an overly narrow prior
+    // bias toward 120 BPM.
     for (uint16_t i = 0; i < kTempoCandidates; i++) {
         float diff = static_cast<float>(i) - 20.0f;
-        prev_delta_[i] = expf(-0.5f * (diff * diff) / (kTempoSigma * kTempoSigma));
+        prev_delta_[i] = expf(-0.5f * (diff * diff) / (kInitialPriorSigma * kInitialPriorSigma));
     }
 }
 
@@ -420,9 +436,12 @@ inline void BTrack::update_tempo_estimate_() {
     float delta_sum = 0.0f;
     for (uint16_t j = 0; j < kTempoCandidates; j++) delta_sum += delta_[j];
     if (delta_sum < 1e-9f) {
+        // Same wide-prior re-seed as reset() / init_tempo_tables_(). Wider
+        // than kTempoSigma so the next non-silent window can lock to any
+        // tempo without fighting a narrow bias toward 120 BPM.
         for (uint16_t i = 0; i < kTempoCandidates; i++) {
             float diff = static_cast<float>(i) - 20.0f;
-            prev_delta_[i] = expf(-0.5f * (diff * diff) / (kTempoSigma * kTempoSigma));
+            prev_delta_[i] = expf(-0.5f * (diff * diff) / (kInitialPriorSigma * kInitialPriorSigma));
         }
         // Don't update tempo this round — no information to learn from.
         // Keep previous current_bpm_ and drop confidence.
