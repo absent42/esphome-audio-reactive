@@ -2,6 +2,39 @@
 
 All notable changes to the ESPHome Audio Reactive component will be documented in this file.
 
+## [0.4.1] - 2026-04-25
+
+### Fixed (pro tier)
+
+- Quiet-room calibration now measures per-musical-band noise floors directly
+  from the raw mel pipeline. The previous V1->V2 interpolation stopgap put V2
+  floors in the wrong scale relative to the AGC's input domain, causing the
+  sub_bass / low_mid / upper_mid sensors to either saturate at 1.0 or stick
+  near 0 even after a fresh calibration. V1->V2 interpolation is now reserved
+  as the boot-time legacy fallback only.
+- BTrack BPM no longer sticks at a stale value through silence. `current_bpm_`
+  resets to the 120 BPM prior on prolonged zero-onset windows so the next
+  non-silent window starts tempo induction without a previous lock biasing
+  the comb-filterbank weighting. The BPM sensor publish is also gated on
+  `bt_confidence >= kSilenceConfidence`; below threshold it publishes 0.0 to
+  honestly mark "no tempo lock" instead of exposing the held internal value.
+
+### Changed
+
+- Mel filterbank `freq_min` raised from 40 Hz to 80 Hz on the pro tier. The
+  PDM mics in basic-tier devices roll off below ~100 Hz, and the I2S codec
+  mics in pro-tier devices typically have a 50-100 Hz HPF, so the lower
+  portion of the previous range was mostly AC line hum and mic self-noise
+  rather than musical content. With `freq_min=80`, mel slot 0 now spans
+  ~80-240 Hz with peak sensitivity near 156 Hz - a realistic kick-drum /
+  bass-guitar fundamental range.
+- The first musical band's user-facing label has been renamed from "Sub Bass"
+  to "Low Bass" to reflect the actual coverage. The YAML config key
+  (`sub_bass_energy`), the C++ enum (`MusicalBands::SUB_BASS`), and the
+  HA-integration discovery suffix (`_sub_bass_energy`) are unchanged - existing
+  installs continue to work without YAML edits. Update the `name:` field in
+  your YAML if you want the new label to apply.
+
 ## [0.4.0] - 2026-04-22
 
 Version 0.4.0 introduces a two-tier DSP architecture. Classic ESP32 boards

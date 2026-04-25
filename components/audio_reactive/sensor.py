@@ -26,9 +26,12 @@ CONF_BEAT_CONFIDENCE = "beat_confidence"
 CONF_BEAT_PHASE = "beat_phase"
 CONF_ONSET_STRENGTH = "onset_strength"
 
-# Pro-tier only: additional perceptual musical bands (sub-bass, low-mid, upper-mid, air).
+# Pro-tier only: additional perceptual musical bands (low-bass, low-mid, upper-mid, air).
 # bass/mid/high remain available on both tiers (basic = band-aggregator output,
 # pro = musical-bands output from mel filterbank).
+# Note: the YAML config key `sub_bass_energy` is preserved for backwards compatibility.
+# The user-facing label is "Audio Low Bass" because the band covers ~80-240 Hz - true
+# sub-bass (<60 Hz) is not picked up reliably by the mics on supported devices.
 CONF_SUB_BASS_ENERGY = "sub_bass_energy"
 CONF_LOW_MID_ENERGY = "low_mid_energy"
 CONF_UPPER_MID_ENERGY = "upper_mid_energy"

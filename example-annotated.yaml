@@ -357,7 +357,9 @@ sensor:
     # effects. Each is a 0.0-1.0 normalized energy aggregated from the 32-mel filterbank.
     # YAML validation fails if any of these are declared without dsp_tier: pro.
     # sub_bass_energy:
-    #   name: "Sub Bass Energy"   # ~20-60 Hz  — subwoofer / kick drum fundamental
+    #   name: "Low Bass Energy"   # ~80-240 Hz — kick drum / bass guitar fundamental
+    #                              # (mics roll off below ~80 Hz, so true sub-bass <60 Hz
+    #                              # is not picked up reliably)
     # low_mid_energy:
     #   name: "Low Mid Energy"    # ~250-500 Hz — vocal warmth, bass guitar body
     # upper_mid_energy:

@@ -70,7 +70,14 @@ void AudioReactiveComponent::setup() {
     // has valid mel_fb_ coefficients and a mags_sq_ buffer to write into.
     // Uses default heap (in PSRAM on S3R via ESP-IDF allocator with SPIRAM_USE_MALLOC enabled).
     mags_sq_ = new float[fft_->bin_count()]();
-    mel_fb_.setup(sample_rate_, 40.0f, 16000.0f);
+    // freq_min=80 Hz aligns mel slot 0 with the realistic low-end response of
+    // the supported mics: PDM MEMS (SPM1423) is -3 dB at ~100 Hz and steeply
+    // attenuated below; codec-driven mics (ES7210/ES7243) typically have a
+    // 50-100 Hz HPF. Below 80 Hz is mostly AC line hum (50/60 Hz) and mic
+    // self-noise rather than musical content. With freq_min=80, mel slot 0
+    // (the "low_bass" musical band) spans ~80-240 Hz with peak sensitivity
+    // near 156 Hz - a reasonable kick-drum / bass-guitar fundamental range.
+    mel_fb_.setup(sample_rate_, 80.0f, 16000.0f);
     musical_bands_.reset();
     musical_bands_.set_noise_floors(cal_store_v2_.noise_floor);
     ESP_LOGI(TAG, "Pro-tier DSP initialized: FFT=%u, N_MEL=%u, bands=%u",
@@ -817,7 +824,7 @@ void AudioReactiveComponent::finish_quiet_calibration() {
     if (calibration_stale_sensor_ != nullptr) {
         calibration_stale_sensor_->publish_state(false);
     }
-    ESP_LOGI(TAG, "V2 noise floors: sub_bass=%.3f bass=%.3f low_mid=%.3f mid=%.3f upper_mid=%.3f high=%.3f air=%.3f",
+    ESP_LOGI(TAG, "V2 noise floors: low_bass=%.3f bass=%.3f low_mid=%.3f mid=%.3f upper_mid=%.3f high=%.3f air=%.3f",
              cal_store_v2_.noise_floor[0], cal_store_v2_.noise_floor[1],
              cal_store_v2_.noise_floor[2], cal_store_v2_.noise_floor[3],
              cal_store_v2_.noise_floor[4], cal_store_v2_.noise_floor[5],

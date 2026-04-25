@@ -93,8 +93,8 @@ needed unless you want to override the default.
 |-------|-----|-------|------|-----|-------------|--------------|----------------|-------|
 | M5 ATOM Echo (original) | ESP32-PICO-D4 | none | Basic | 512-pt | 22.05 kHz | Autocorrelation | Complex-domain | 3 (bass / mid / high) |
 | M5StickC Plus2 | ESP32-PICO-V3-02 | none | Basic | 512-pt | 22.05 kHz | Autocorrelation | Complex-domain | 3 (bass / mid / high) |
-| M5 ATOM Echo S3R | ESP32-S3 | 8 MB octal | Pro | 2048-pt | 44.1 kHz | BTrack (comb + Viterbi + DP) | SuperFlux | 7 musical (sub_bass, bass, low_mid, mid, upper_mid, high, air) |
-| Waveshare ESP32-S3 Audio | ESP32-S3 | 8 MB octal | Pro | 2048-pt | 44.1 kHz | BTrack (comb + Viterbi + DP) | SuperFlux | 7 musical (sub_bass, bass, low_mid, mid, upper_mid, high, air) |
+| M5 ATOM Echo S3R | ESP32-S3 | 8 MB octal | Pro | 2048-pt | 44.1 kHz | BTrack (comb + Viterbi + DP) | SuperFlux | 7 musical (low_bass, bass, low_mid, mid, upper_mid, high, air) |
+| Waveshare ESP32-S3 Audio | ESP32-S3 | 8 MB octal | Pro | 2048-pt | 44.1 kHz | BTrack (comb + Viterbi + DP) | SuperFlux | 7 musical (low_bass, bass, low_mid, mid, upper_mid, high, air) |
 
 Tier auto-detection requires both ESP32-S3 and a top-level `psram:` block in
 your YAML. Override with `dsp_tier: basic | pro | auto` (default `auto`).
@@ -109,7 +109,7 @@ already publishes:
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| Sub Bass Energy | sensor (0-1) | ~20-60 Hz - subwoofer / kick drum fundamental |
+| Low Bass Energy | sensor (0-1) | ~80-240 Hz - kick drum / bass guitar fundamental (mics roll off below ~80 Hz, so true sub-bass <60 Hz is not picked up reliably) |
 | Low Mid Energy | sensor (0-1) | ~250-500 Hz - vocal warmth, bass guitar body |
 | Upper Mid Energy | sensor (0-1) | ~2-4 kHz - vocal clarity, snare crack |
 | Air Energy | sensor (0-1) | ~8-16 kHz - cymbals, sibilance, sparkle |

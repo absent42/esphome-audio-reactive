@@ -151,7 +151,7 @@ sensor:
     onset_strength:
       name: "Onset Strength"
     sub_bass_energy:
-      name: "Audio Sub Bass"
+      name: "Audio Low Bass"
     low_mid_energy:
       name: "Audio Low Mid"
     upper_mid_energy:
