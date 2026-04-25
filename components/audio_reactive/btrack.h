@@ -32,8 +32,16 @@ class BTrack {
  public:
     static constexpr uint16_t kHistoryLen = 512;       // ~5.95s @ 86Hz (== BTrack onsetDFBufferSize)
     static constexpr float   kFrameHz     = 86.13f;    // 44100 / 512
-    static constexpr float   kBpmMin      = 60.0f;
-    static constexpr float   kBpmMax      = 180.0f;
+    // BPM detection range. The 41-candidate grid (kTempoCandidates) maps
+    // i=0..40 to lag = round(5168 / (2i + 80)) — i.e. BPMs 80..160 in 2-BPM
+    // steps. Tempos outside this range can't be detected: a 60-BPM ballad
+    // resolves to ~80 BPM, a 180-BPM track to ~160. The constants below
+    // reflect what the grid actually covers; anything else would silently
+    // misreport. Expanding the grid (step 3 over [60,180], or 61 candidates)
+    // is a wider-impact change touching the Rayleigh prior + Viterbi arrays;
+    // documenting the real range is the conservative fix until that lands.
+    static constexpr float   kBpmMin      = 80.0f;
+    static constexpr float   kBpmMax      = 160.0f;
     static constexpr float   kBpmPriorCenter = 120.0f;
     static constexpr uint16_t kWarmupFrames = 256;     // ~3s before confidence ramps
     static constexpr uint16_t kMinLockFrames = 86;     // ~1s of confidence >= threshold for events
@@ -102,16 +110,32 @@ class BTrack {
     // timeToNextPrediction counts down to the next predictBeat() call.
     int16_t time_to_next_prediction_{10};
 
-    // Scratch buffers for predict_beat_() — kept as class members instead of
-    // stack locals because the FFT task's stack is only 6144 bytes.
-    // future_cs_ holds the linearised cumulative score (512 frames) plus a
-    // synthesised future window (max ~220 frames at 60 BPM).
-    // log_gauss_ sized to the max past-window length (~1.5 * max beat period
-    // at 60 BPM ≈ 129 frames; 256 gives comfortable headroom).
+    // Scratch buffers — class members instead of stack locals because the
+    // FFT task's stack is only 6144 bytes (xTaskCreatePinnedToCore in
+    // audio_reactive.cpp). A single 2 KB stack-local would already eat a
+    // third of that budget; multiple in the same call chain would overflow.
+    //
+    // Sizing rationale:
+    //   future_cs_       — linearised cumulative score (kHistoryLen) + a
+    //                      synthesised future window (max ~220 frames at
+    //                      60 BPM). Used by predict_beat_().
+    //   log_gauss_       — log-Gaussian weights for predict_beat_(). Max
+    //                      past-window length is ~1.5 × max beat period
+    //                      at 60 BPM ≈ 129 frames; 256 gives headroom.
+    //                      Also reused by update_cumulative_score_() —
+    //                      its win_size never exceeds ~1.5 × beat_period
+    //                      ≈ 96 frames at 80 BPM.
+    //   acf_buf_         — linearised onset history for autocorrelation
+    //                      in calculate_balanced_acf_(). Size = kHistoryLen.
+    //   threshold_scratch_ — local-mean buffer used by adaptive_threshold_().
+    //                        Sized to the largest input it operates on
+    //                        (kHistoryLen, since it runs on acf_).
     static constexpr uint16_t kMaxFutureFrames = 220;
     static constexpr uint16_t kLogGaussMaxLen = 256;
     float future_cs_[kHistoryLen + kMaxFutureFrames]{};
     float log_gauss_[kLogGaussMaxLen]{};
+    float acf_buf_[kHistoryLen]{};
+    float threshold_scratch_[kHistoryLen]{};
 
     // Algorithmic pieces (adamstark/BTrack port, adapted for our streaming input).
     void init_tempo_tables_();
@@ -271,15 +295,16 @@ inline BTrack::Result BTrack::process(float onset_strength) {
 // valid overlap region. Equivalent to reference calculateBalancedACF().
 inline void BTrack::calculate_balanced_acf_() {
     // Linearise ring into time-ordered form: oldest at index 0, newest at N-1.
-    float buf[kHistoryLen];
+    // Uses the class-member acf_buf_ scratch (was a 2 KB stack-local) so this
+    // function fits comfortably in the FFT task's 6 KB stack budget.
     for (uint16_t i = 0; i < kHistoryLen; i++) {
-        buf[i] = onset_history_[(history_write_ + i) % kHistoryLen];
+        acf_buf_[i] = onset_history_[(history_write_ + i) % kHistoryLen];
     }
     for (uint16_t lag = 0; lag < kHistoryLen; lag++) {
         float sum = 0.0f;
         uint16_t count = kHistoryLen - lag;
         for (uint16_t i = 0; i < count; i++) {
-            sum += buf[i] * buf[i + lag];
+            sum += acf_buf_[i] * acf_buf_[i + lag];
         }
         acf_[lag] = (count > 0) ? (sum / static_cast<float>(count)) : 0.0f;
     }
@@ -317,7 +342,10 @@ inline float BTrack::mean_slice_(const float *x, uint16_t lo, uint16_t hi) {
 inline void BTrack::adaptive_threshold_(float *x, uint16_t N) {
     constexpr int p_pre = 8;
     constexpr int p_post = 7;
-    float thresh[kHistoryLen];
+    // Reuses the class-member threshold_scratch_ (was a 2 KB stack-local).
+    // Sized to kHistoryLen which is the largest N this method ever runs on
+    // (it's also called with N=kCombFbSize=128 — uses just a prefix slice).
+    float *thresh = threshold_scratch_;
     for (uint16_t i = 0; i < N; i++) thresh[i] = 0.0f;
     int t = std::min<int>(N, p_post);
     for (int i = 0; i <= t; i++) {
@@ -502,8 +530,17 @@ inline void BTrack::update_cumulative_score_(float onset) {
     // window. history_write_ is the slot we'll write into THIS frame (one past
     // newest); the oldest slot is history_write_ itself (since it wraps).
     // To avoid large scratch, index the ring directly.
-    float log_gauss[kHistoryLen];  // windowed use only
-    make_log_gaussian_weights_(log_gauss, static_cast<uint16_t>(win_size), bp);
+    //
+    // Uses the class-member log_gauss_ (sized kLogGaussMaxLen=256, more than
+    // enough — win_size = ~1.5 × beat_period_frames_val_ is at most ~96 at
+    // 80 BPM and far less at higher tempos). Was previously a 2 KB stack-local
+    // array which contributed to FFT-task stack pressure.
+    if (static_cast<uint16_t>(win_size) > kLogGaussMaxLen) {
+        // Defensive cap: if some pathological beat period somehow exceeded
+        // the scratch budget we'd corrupt memory. Truncate instead.
+        win_size = kLogGaussMaxLen;
+    }
+    make_log_gaussian_weights_(log_gauss_, static_cast<uint16_t>(win_size), bp);
 
     // Compute max over window of cumulative_score[i] * log_gauss[n].
     float max_val = 0.0f;
@@ -511,7 +548,7 @@ inline void BTrack::update_cumulative_score_(float onset) {
         int32_t lin = win_start + k;
         // linear index 0 == history_write_ slot (oldest after we overwrite it)
         uint16_t ring = static_cast<uint16_t>((history_write_ + lin) % kHistoryLen);
-        float v = cumulative_score_[ring] * log_gauss[k];
+        float v = cumulative_score_[ring] * log_gauss_[k];
         if (v > max_val) max_val = v;
     }
     float new_score = (1.0f - kAlpha) * onset + kAlpha * max_val;
