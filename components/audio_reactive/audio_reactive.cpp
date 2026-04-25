@@ -354,6 +354,25 @@ void AudioReactiveComponent::loop() {
     if (debug_logging_) process_debug_logging_(now, energies);
     accumulate_calibration_(now, energies);
 
+#ifdef AUDIO_REACTIVE_PRO
+    // Pro-tier quiet-calibration accumulator: capture per-musical-band raw mel
+    // sums in the same domain the AGCs see. MUST run before the silence-path
+    // early-return below — quiet calibration is BY DEFINITION run in a silent
+    // room, so the silence detector trips and would skip this block if it sat
+    // after the early return. (That bug zeroed every cal_sum_mel_band_ entry,
+    // produced noise_floor=0 across all 7 bands, and caused AGC wind-up
+    // saturation during silence.)
+    if (cal_state_ == CAL_QUIET) {
+        for (uint8_t m = 0; m < MusicalBands::kNumBands; m++) {
+            float band_sum = 0.0f;
+            for (uint8_t i = MusicalBands::kMelStart[m]; i < MusicalBands::kMelEnd[m]; i++) {
+                band_sum += mel_frame_snapshot[i];
+            }
+            cal_sum_mel_band_[m] += band_sum;
+        }
+    }
+#endif
+
     // Silence detection on mid+high energy
     float silence_signal = energies.mid + energies.high;
     auto silence_result = silence_det_.update(silence_signal, now);
@@ -414,22 +433,10 @@ void AudioReactiveComponent::loop() {
 #endif
 
 #ifdef AUDIO_REACTIVE_PRO
-    // Quiet-calibration accumulator: capture raw per-musical-band sums in the
-    // same domain the AGCs see (sum of raw mel slots, no scaling). Computed
-    // BEFORE musical_bands_.process() so the floors derived from these means
-    // match the AGC input scale.
-    if (cal_state_ == CAL_QUIET) {
-        for (uint8_t m = 0; m < MusicalBands::kNumBands; m++) {
-            float band_sum = 0.0f;
-            for (uint8_t i = MusicalBands::kMelStart[m]; i < MusicalBands::kMelEnd[m]; i++) {
-                band_sum += mel_frame_snapshot[i];
-            }
-            cal_sum_mel_band_[m] += band_sum;
-        }
-    }
-
     // Pro tier: compute 7 musical bands from the raw mel frame. Each band applies
     // per-band AGC + asymmetric EMA smoothing internally.
+    // (Quiet-calibration accumulator was moved above, before the silence early-
+    // return path, so it runs even during the silent calibration window.)
     musical_bands_.process(mel_frame_snapshot, musical_band_energies_);
 
     // SuperFlux onset event: publish on event only (matches basic-tier cadence).
@@ -804,9 +811,23 @@ void AudioReactiveComponent::finish_quiet_calibration() {
     // only a legacy V1 NVS store exists; a fresh quiet calibration always uses
     // direct per-band measurement.
     if (cal_quiet_count_ > 0) {
-        for (uint8_t m = 0; m < MusicalBands::kNumBands; m++) {
-            float mean = cal_sum_mel_band_[m] / static_cast<float>(cal_quiet_count_);
-            cal_store_v2_.noise_floor[m] = mean * 1.5f;
+        // Defensive check: if every band sum is zero the accumulator never ran
+        // (e.g., the silence early-return path skipped it), and writing all-zero
+        // noise floors would defeat the AGC suppression and cause wind-up
+        // saturation at runtime. Surface the failure via WARN and fall back to
+        // the V1->V2 interpolated floors so the device still behaves sensibly.
+        float total_sum = 0.0f;
+        for (uint8_t m = 0; m < MusicalBands::kNumBands; m++) total_sum += cal_sum_mel_band_[m];
+        if (total_sum <= 0.0f) {
+            ESP_LOGW(TAG, "Pro-tier mel-band accumulator captured zero data during quiet "
+                          "calibration - falling back to V1->V2 interpolation. Likely cause: "
+                          "the accumulator was placed below the silence-path early-return.");
+            migrate_v1_to_v2(cal_store_, cal_store_v2_);
+        } else {
+            for (uint8_t m = 0; m < MusicalBands::kNumBands; m++) {
+                float mean = cal_sum_mel_band_[m] / static_cast<float>(cal_quiet_count_);
+                cal_store_v2_.noise_floor[m] = mean * 1.5f;
+            }
         }
     }
     // squelch_threshold is consumed by silence_det_ on basic-tier energies
@@ -902,6 +923,12 @@ void AudioReactiveComponent::apply_calibration() {
 void AudioReactiveComponent::apply_calibration_v2_() {
     // Push per-musical-band noise floors directly into the 7 musical_bands AGCs.
     musical_bands_.set_noise_floors(cal_store_v2_.noise_floor);
+    // Reset musical_bands_ AGC state (gain / integrator / sample tracking /
+    // smoothed_) so post-calibration behavior reflects the new floors without
+    // any wind-up that may have accumulated under stale/wrong floors. The
+    // PI loop converges on the new equilibrium from defaults rather than from
+    // a possibly-saturated prior state.
+    musical_bands_.reset();
     // Also invoke the basic-tier apply path so shared scalar state (raw_scale_,
     // squelch threshold, basic-tier AGC floors mirrored from V2) stays in sync.
     apply_calibration();
