@@ -612,14 +612,15 @@ void AudioReactiveComponent::publish_zeros_() {
     if (amplitude_sensor_ != nullptr) amplitude_sensor_->publish_state(0.0f);
     if (centroid_sensor_ != nullptr) centroid_sensor_->publish_state(0.0f);
     if (rolloff_sensor_ != nullptr) rolloff_sensor_->publish_state(0.0f);
+#ifdef AUDIO_REACTIVE_PRO
     // Pro-tier musical-band sensors: also zero on silence so they don't freeze
-    // at the last non-silent value. Pointers are unconditionally declared and
-    // are nullptr on basic-tier builds (or pro-tier builds without the sensors
-    // configured), so the null guard is sufficient — no #ifdef needed.
+    // at the last non-silent value. The pointer fields are #ifdef-gated in
+    // the header, so this block must be too.
     if (sub_bass_sensor_ != nullptr) sub_bass_sensor_->publish_state(0.0f);
     if (low_mid_sensor_ != nullptr) low_mid_sensor_->publish_state(0.0f);
     if (upper_mid_sensor_ != nullptr) upper_mid_sensor_->publish_state(0.0f);
     if (air_sensor_ != nullptr) air_sensor_->publish_state(0.0f);
+#endif
 }
 
 void AudioReactiveComponent::set_muted(bool muted) {
