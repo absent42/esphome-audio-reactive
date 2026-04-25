@@ -388,6 +388,10 @@ void AudioReactiveComponent::loop() {
             if (bpm_sensor_ != nullptr) bpm_sensor_->publish_state(0.0f);
             if (beat_confidence_sensor_ != nullptr) beat_confidence_sensor_->publish_state(0.0f);
             if (beat_phase_sensor_ != nullptr) beat_phase_sensor_->publish_state(0.0f);
+            // onset_strength is event-driven (only published when an onset fires),
+            // so without an explicit zero on the silence edge it would freeze at
+            // the last event's value indefinitely.
+            if (onset_strength_sensor_ != nullptr) onset_strength_sensor_->publish_state(0.0f);
             if (onset_det_ != nullptr) onset_det_->reset();
             if (beat_tracker_ != nullptr) beat_tracker_->reset();
 #ifdef AUDIO_REACTIVE_PRO
@@ -608,6 +612,14 @@ void AudioReactiveComponent::publish_zeros_() {
     if (amplitude_sensor_ != nullptr) amplitude_sensor_->publish_state(0.0f);
     if (centroid_sensor_ != nullptr) centroid_sensor_->publish_state(0.0f);
     if (rolloff_sensor_ != nullptr) rolloff_sensor_->publish_state(0.0f);
+    // Pro-tier musical-band sensors: also zero on silence so they don't freeze
+    // at the last non-silent value. Pointers are unconditionally declared and
+    // are nullptr on basic-tier builds (or pro-tier builds without the sensors
+    // configured), so the null guard is sufficient — no #ifdef needed.
+    if (sub_bass_sensor_ != nullptr) sub_bass_sensor_->publish_state(0.0f);
+    if (low_mid_sensor_ != nullptr) low_mid_sensor_->publish_state(0.0f);
+    if (upper_mid_sensor_ != nullptr) upper_mid_sensor_->publish_state(0.0f);
+    if (air_sensor_ != nullptr) air_sensor_->publish_state(0.0f);
 }
 
 void AudioReactiveComponent::set_muted(bool muted) {
