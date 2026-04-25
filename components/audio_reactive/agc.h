@@ -7,40 +7,60 @@ namespace esphome {
 namespace audio_reactive {
 
 struct AGCPreset {
-    float kp;            // Proportional gain
-    float ki;            // Integral gain
-    float attack_rate;   // Fast follow rate (signal rising)
-    float release_rate;  // Slow follow rate (signal falling)
-    float target;        // Target output level (0-1 normalized)
-    float decay;         // Sample tracking decay factor
-    float gain_step;     // Per-frame gain-adjustment scale factor.
-                         // Larger = faster gain convergence; smaller = more
-                         // stable. The classic basic-tier presets used a
-                         // hardcoded 0.001f multiplier — kept here as default
-                         // for those. Pro-tier per-band AGCs (AGC_FAST) use
-                         // a larger value so gain catches up to raw mel-band
-                         // dynamics in seconds rather than minutes.
+    float kp;             // Proportional gain
+    float ki;             // Integral gain
+    float attack_rate;    // Fast follow rate (signal rising)
+    float release_rate;   // Slow follow rate (signal falling)
+    float target;         // Target output level (0-1 normalized)
+    float decay;          // Sample tracking decay factor
+    float gain_step;      // Per-frame gain-adjustment scale factor.
+    float gain_min;       // Lower clamp on gain. Determines max attenuation:
+                          // for raw input X to land at target T, gain must
+                          // reach T/X. If T/X < gain_min the AGC saturates.
+                          // Basic-tier presets use 1/64 (input pre-scaled).
+                          // Pro-tier per-band AGCs need much smaller because
+                          // raw mel sums can be in the thousands.
+    float gain_max;       // Upper clamp on gain (max amplification).
+    float max_adjustment; // Per-frame absolute cap on the PI adjustment
+                          // before multiplying by gain_step. Prevents the
+                          // gain from crashing through the clamp in one
+                          // frame when error is huge (raw inputs in the
+                          // thousands, kp=1, |adjustment| ~= |error|).
+                          // Basic-tier presets use a high value (effectively
+                          // uncapped — historical behavior). Pro-tier AGC_FAST
+                          // uses 2.0 so gain_change per frame is bounded to
+                          // 2 * gain_step ≈ 0.01, giving smooth ~1-second
+                          // convergence regardless of input magnitude.
 };
 
 // Basic-tier presets — tuned for inputs already pre-scaled by raw_scale_
-// (typically ~1/20), so input dynamic range is roughly 0–1.
-static constexpr AGCPreset AGC_NORMAL = {0.6f,  1.7f,  1.0f / 192,  1.0f / 6144, 0.5f,  0.9994f, 0.001f};
-static constexpr AGCPreset AGC_VIVID  = {1.5f,  1.85f, 1.0f / 128,  1.0f / 4096, 0.55f, 0.9985f, 0.001f};
-static constexpr AGCPreset AGC_LAZY   = {0.65f, 1.2f,  1.0f / 256,  1.0f / 8192, 0.45f, 0.9997f, 0.001f};
+// (typically ~1/20), so input dynamic range is roughly 0–1. gain_min/max
+// and max_adjustment values match the original hardcoded behaviour.
+static constexpr AGCPreset AGC_NORMAL = {0.6f,  1.7f,  1.0f / 192,  1.0f / 6144, 0.5f,  0.9994f, 0.001f, 1.0f / 64.0f,    32.0f, 1000.0f};
+static constexpr AGCPreset AGC_VIVID  = {1.5f,  1.85f, 1.0f / 128,  1.0f / 4096, 0.55f, 0.9985f, 0.001f, 1.0f / 64.0f,    32.0f, 1000.0f};
+static constexpr AGCPreset AGC_LAZY   = {0.65f, 1.2f,  1.0f / 256,  1.0f / 8192, 0.45f, 0.9997f, 0.001f, 1.0f / 64.0f,    32.0f, 1000.0f};
 
-// Pro-tier per-musical-band preset — used by MusicalBands for raw mel sums.
-// Mel sums are NOT pre-scaled by raw_scale_, so inputs span a much wider and
-// less predictable range than basic-tier inputs. Convergence has to be fast
-// enough that the AGC reaches steady state during a typical music passage
-// instead of staying in the wind-up transient (which manifests as either
-// saturated output or under-amplified silence depending on signal level).
-//   release_rate 1/512 ≈ 6 s sample_avg time constant (was 71 s on _NORMAL).
-//   attack_rate 1/64 — quicker peak tracking for dynamic music transients.
-//   gain_step 0.005 — 5x faster gain wind-up/down per frame than basic.
-//   kp / ki bumped to keep the PI loop responsive at the new step size.
-//   target 0.5 — same as _NORMAL.
-//   decay 0.998 — sample_max decays slightly faster, matches faster attack.
-static constexpr AGCPreset AGC_FAST   = {1.0f,  2.0f,  1.0f / 64,   1.0f / 512,  0.5f,  0.998f,  0.005f};
+// Pro-tier per-musical-band preset — used by MusicalBands for RAW mel sums.
+// Differences from the basic-tier presets explained inline:
+//   release_rate 1/512  ≈ 6 s sample_avg time constant (was 71 s on _NORMAL).
+//   attack_rate 1/64    — quicker peak tracking for dynamic music transients.
+//   gain_step 0.005     — 5x faster gain wind-up/down per frame than basic.
+//   kp / ki bumped      — keeps PI responsive at the larger step size.
+//   gain_min 1/16384    — raw mel sums on hardware reach 2000+ during music;
+//                         to bring those to target=0.5 requires gain ≈ 1/4000.
+//                         The basic-tier 1/64 floor saturated us at ~30x too
+//                         high (output stuck at 1.0 even though gain was at
+//                         its floor). 1/16384 gives headroom for inputs up
+//                         to ~8000 to land at target.
+//   max_adjustment 2.0  — caps |adjustment| so a huge raw input (error in
+//                         the thousands) doesn't crash gain through the floor
+//                         in a single frame. With max=2 and gain_step=0.005,
+//                         |gain_change| ≤ 0.01 per frame, giving a smooth
+//                         ~1.2-second convergence from gain=1 down to the
+//                         floor under sustained loud input.
+//   target 0.5          — same as _NORMAL.
+//   decay 0.998         — sample_max decays slightly faster, matches faster attack.
+static constexpr AGCPreset AGC_FAST   = {1.0f,  2.0f,  1.0f / 64,   1.0f / 512,  0.5f,  0.998f,  0.005f, 1.0f / 16384.0f, 32.0f,    2.0f};
 
 class AGC {
  public:
@@ -78,10 +98,14 @@ class AGC {
         integrator_ = std::max(-2.0f, std::min(2.0f, integrator_));
 
         float adjustment = error * preset_.kp + integrator_;
+        // Clamp adjustment so a single huge-error frame can't crash gain
+        // through the clamp in one step. See AGC_FAST docs.
+        adjustment = std::max(-preset_.max_adjustment,
+                              std::min(preset_.max_adjustment, adjustment));
         gain_ += adjustment * preset_.gain_step;
 
-        // Clamp gain to reasonable range
-        gain_ = std::max(1.0f / 64.0f, std::min(32.0f, gain_));
+        // Clamp gain to the preset's allowed range.
+        gain_ = std::max(preset_.gain_min, std::min(preset_.gain_max, gain_));
 
         // Apply gain and clamp output
         float result = raw_value * gain_;
