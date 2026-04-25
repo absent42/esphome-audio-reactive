@@ -10,10 +10,15 @@
 #include <cmath>
 #include <cstdint>
 
-#ifdef AUDIO_REACTIVE_NATIVE_TEST
-// Minimal AGC stub for native compilation. Mirrors the public surface used
-// by MusicalBands (default ctor, set_noise_floor, process, reset). The real
-// AGC class (agc.h) is used on device builds.
+#if defined(AUDIO_REACTIVE_NATIVE_TEST) && !defined(MUSICAL_BANDS_USE_REAL_AGC)
+// Minimal AGC stub for unit-test native compilation that doesn't care about
+// AGC dynamics (e.g. test_musical_bands which only verifies mel-slot
+// aggregation correctness). Mirrors the public surface used by MusicalBands
+// (default ctor, set_noise_floor, process, reset).
+//
+// Define MUSICAL_BANDS_USE_REAL_AGC before including this header to use the
+// real AGC class even under native test (e.g. test_e2e_pro_pipeline, where
+// AGC dynamics are exactly what we want to exercise).
 enum AGCMode { AGC_NORMAL };
 struct AGC_Stub {
     AGC_Stub(AGCMode mode = AGC_NORMAL) { (void) mode; }
@@ -55,7 +60,7 @@ class MusicalBands {
     static constexpr float kEmaFastRise = 0.75f;
     static constexpr float kEmaSlowFall = 0.17f;
 
-#ifdef AUDIO_REACTIVE_NATIVE_TEST
+#if defined(AUDIO_REACTIVE_NATIVE_TEST) && !defined(MUSICAL_BANDS_USE_REAL_AGC)
     using AGCType = AGC_Stub;
 #else
     using AGCType = AGC;
