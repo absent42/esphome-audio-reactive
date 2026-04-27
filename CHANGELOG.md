@@ -2,6 +2,27 @@
 
 All notable changes to the ESPHome Audio Reactive component will be documented in this file.
 
+## [0.4.2] - 2026-04-27
+
+### Fixed (pro tier)
+
+- BTrack beat tracker rewritten from scratch against the adamstark/BTrack
+  reference. The previous port had accumulated enough drift through six
+  successive patches that on real music the BPM locked at ~114 regardless
+  of tempo. The new implementation now reports the correct BPM across the
+  full 80-160 detection range — verified with metronome fixtures at 90 BPM
+  and 120 BPM, and a synthetic music-stress fixture at 120 BPM. Three
+  load-bearing fixes that landed in the rewrite: (a) adaptive thresholding
+  is applied to the onset detection function BEFORE the autocorrelation
+  step, removing the DC bias that was burying beat-period peaks in the ACF;
+  (b) the initial Viterbi prior is uniform 1.0 across all candidates instead
+  of a tightly-peaked Gaussian centred on 120 BPM, so off-prior tempos can
+  lock without being pulled toward the prior; (c) tempo induction now runs
+  per-beat (when the beat-prediction timer hits zero) rather than every 43
+  frames on a fixed cadence, matching the reference's event-driven design.
+  The full re-derivation lives in [btrack.h](components/audio_reactive/btrack.h),
+  driven test-first by 14 unit tests in `test/test_btrack/test_btrack.cpp`.
+
 ## [0.4.1] - 2026-04-25
 
 ### Fixed (pro tier)

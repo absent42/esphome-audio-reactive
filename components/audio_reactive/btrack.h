@@ -3,654 +3,686 @@
 #include <cmath>
 #include <cstdint>
 #include <algorithm>
-#include <numeric>
+
+// BTrack-class beat tracker — clean re-implementation against the adamstark/BTrack
+// reference (https://github.com/adamstark/BTrack). The previous port at this path
+// drifted from the reference through multiple patches and locked on the wrong
+// tempo on real music; see docs/plans/superpowers/specs/2026-04-27-btrack-
+// reimplementation-analysis.md (in the aqara_advanced_lighting repo) for the
+// post-mortem and per-step rebuild plan.
+//
+// Each algorithmic helper below is a public static method so unit tests can
+// exercise it in isolation; see test/test_btrack/test_btrack.cpp for the
+// per-helper coverage that drove the implementation. The BTrack class itself
+// wraps stateful per-frame work (ring buffers, timers, Viterbi prior).
+//
+// Notable differences from the reference:
+//   - Time-domain balanced ACF instead of FFT (simpler on ESP32-S3; output
+//     is a constant factor 1/N below the reference's, irrelevant for argmax).
+//   - adaptive_threshold uses the clamped window length as divisor at edges
+//     (the reference reads x[-1] at i=8 — UB — and divides by a fixed 16,
+//     producing a small DC residual; we clamp safely).
+//   - All scratch buffers live as class members (the FFT task that calls
+//     process() has only a 6 KB stack, no room for 2 KB stack-locals).
 
 namespace esphome {
 namespace audio_reactive {
 
-/// BTrack-class beat tracker.
-/// Input: onset-strength stream (86 Hz at 44.1 kHz / 2048-pt FFT / 512-hop).
-/// Outputs per-frame: bpm, beat_phase [0,1], beat_confidence [0,1], beat_event.
-///
-/// The tempo-induction and DP beat-phase algorithms are ported from Adam Stark's
-/// BTrack implementation (MIT-licensed, https://github.com/adamstark/BTrack),
-/// which in turn is a re-implementation of:
-///
-///   Stark, Davies and Plumbley (2009) - "Real-Time Beat-Synchronous Analysis of
-///   Musical Audio", DAFx 2009.
-///
-/// Adaptations for this project:
-///   - Input is a scalar onset-strength stream from SuperFlux, so the reference's
-///     spectral-flux / resample-to-512 pipeline is bypassed; our onset history
-///     matches the reference buffer cadence (~86 Hz, hop=512 @ 44.1 kHz).
-///   - Project-specific event gating (cold-start warm-up, lock-window,
-///     silence-hold, fast silence detection via zero_onset_streak_) wraps the
-///     DP output; these are NOT part of the BTrack algorithm.
-///   - Tempo estimation runs on a fixed 43-frame cadence rather than
-///     per-beat, so behavior stays stable across silence and cold-start.
 class BTrack {
  public:
-    static constexpr uint16_t kHistoryLen = 512;       // ~5.95s @ 86Hz (== BTrack onsetDFBufferSize)
-    static constexpr float   kFrameHz     = 86.13f;    // 44100 / 512
-    // BPM detection range. The 41-candidate grid (kTempoCandidates) maps
-    // i=0..40 to lag = round(5168 / (2i + 80)) — i.e. BPMs 80..160 in 2-BPM
-    // steps. Tempos outside this range can't be detected: a 60-BPM ballad
-    // resolves to ~80 BPM, a 180-BPM track to ~160. The constants below
-    // reflect what the grid actually covers; anything else would silently
-    // misreport. Expanding the grid (step 3 over [60,180], or 61 candidates)
-    // is a wider-impact change touching the Rayleigh prior + Viterbi arrays;
-    // documenting the real range is the conservative fix until that lands.
-    static constexpr float   kBpmMin      = 80.0f;
-    static constexpr float   kBpmMax      = 160.0f;
-    static constexpr float   kBpmPriorCenter = 120.0f;
-    static constexpr uint16_t kWarmupFrames = 256;     // ~3s before confidence ramps
-    static constexpr uint16_t kMinLockFrames = 86;     // ~1s of confidence >= threshold for events
-    static constexpr float   kLockConfidence = 0.4f;
-    static constexpr float   kSilenceConfidence = 0.3f;
-    static constexpr uint16_t kSilenceHoldFrames = 258;  // ~3s
+    // Frame rate of the onset-detection-function stream BTrack consumes.
+    // 44100 Hz / 512-sample hop = 86.13 frames/s.
+    static constexpr float kFrameHz = 86.13f;
 
-    // Comb filterbank / Viterbi tempo-tracking parameters (mirrors reference).
-    static constexpr uint16_t kCombFbSize = 128;       // max beat period in frames
-    static constexpr uint16_t kTempoCandidates = 41;   // reference uses 41 candidate tempi
-    static constexpr float   kRayleighParameter = 43.0f;   // peak of Rayleigh ~ 120 BPM @ 86 Hz
-    static constexpr float   kTempoSigma = 41.0f / 8.0f;   // stddev for tempo transition matrix
-    // Initial prevDelta is uniform 1.0 across all candidates (matching
-    // adamstark's reference). No Gaussian initial prior — observations
-    // alone determine the first lock. An earlier port-error Gaussian
-    // centred on 120 BPM created a strong bias toward index 20 that
-    // prevented other tempos from locking even when the comb-filterbank
-    // observation strongly favoured them. See git log for context.
-    static constexpr float   kTightness = 5.0f;            // log-gaussian tightness (reference: 5)
-    static constexpr float   kAlpha = 0.9f;                // cumulative-score past/present blend
+    // Onset DF ring length. 512 samples ≈ 5.95s of history at kFrameHz.
+    // Matches the reference's onsetDFBufferSize at hopSize=512.
+    static constexpr int kHistoryLen = 512;
+
+    // BPM detection range. The 41-candidate Viterbi grid (kTempoCandidates)
+    // maps i=0..40 to lag = round(5168 / (2i+80)) — i.e. BPMs in 80..160 in
+    // 2-BPM steps.
+    static constexpr float kBpmMin = 80.0f;
+    static constexpr float kBpmMax = 160.0f;
+
+    // Lock / suppression thresholds used by process(). Externally-visible so
+    // the audio_reactive component can publish "silenced" tempos as zero.
+    static constexpr int   kWarmupFrames = 256;        // ~3s before lock can fire
+    static constexpr int   kSilenceHoldFrames = 258;   // ~3s of silence → drop lock
+    static constexpr float kLockConfidence = 0.4f;
+    static constexpr float kSilenceConfidence = 0.3f;
+
+    // Tempo Viterbi configuration.
+    //   kTempoCandidates : 41-element grid, BPM = 80 + 2i (i=0..40 → 80..160)
+    //   kTempoToLagFactor: 60 · 44100 / 512 — converts BPM to lag in frames
+    //                      via lag = factor / BPM.
+    //   kTempoSigma      : stddev (in candidate-index units) of the Gaussian
+    //                      transition matrix. 41/8 = 5.125 matches the
+    //                      adamstark reference.
+    static constexpr int   kTempoCandidates = 41;
+    static constexpr float kTempoToLagFactor = 5168.0f;
+    static constexpr float kTempoSigma = 5.125f;
+
+    // Comb filterbank size and predict_beat scratch sizes.
+    //   kCombFbSize       : reference uses 128 — max beat period in frames.
+    //   kMaxFutureFrames  : max frames predict_beat extrapolates ahead. At
+    //                       60 BPM (slowest we'd see) bp ≈ 86 frames; round
+    //                       up with margin to 220.
+    //   kLogGaussMaxLen   : max length of log-Gaussian past window. The DP
+    //                       window covers [bp/2, 2*bp] frames in the past
+    //                       (length 1.5*bp + 1). At bp=86 that's 131; 256
+    //                       provides plenty of headroom.
+    static constexpr int   kCombFbSize = 128;
+    static constexpr int   kMaxFutureFrames = 220;
+    static constexpr int   kLogGaussMaxLen = 256;
 
     struct Result {
-        float bpm;            // held at last or 120 during warmup
+        float bpm;            // current tempo estimate
         float beat_phase;     // 0..1, wraps each beat
         float confidence;     // 0..1
-        bool beat_event;      // true on the frame where beat_phase wraps
+        bool  beat_event;     // true on the frame the algorithm predicts a beat
     };
+
+    BTrack() { reset(); }
 
     Result process(float onset_strength);
     void reset();
-
     float last_bpm() const { return current_bpm_; }
 
- protected:
-    // Onset-strength ring buffer (size kHistoryLen).
-    float onset_history_[kHistoryLen]{};
-    uint16_t history_write_{0};
-    uint16_t frames_since_reset_{0};
+    // ------------------------------------------------------------------
+    // Diagnostic / test-only accessors. Not part of the production API
+    // contract — exposed for unit tests of the per-frame state machine.
+    // ------------------------------------------------------------------
+    int time_to_next_beat() const { return time_to_next_beat_; }
+    int time_to_next_prediction() const { return time_to_next_prediction_; }
+    float beat_period_frames() const { return beat_period_frames_val_; }
+    // Override Viterbi-derived beat_period (used by step-5 tests to feed
+    // the DP path a known beat period without going through tempo
+    // induction). The next per-beat tempo update will overwrite it.
+    void debug_set_beat_period_frames(float bp) {
+        if (bp < 1.0f) bp = 1.0f;
+        beat_period_frames_val_ = bp;
+    }
 
-    // Tempo state
-    float current_bpm_{kBpmPriorCenter};
-    float current_confidence_{0.0f};
-    // beat period in frames (float to avoid quantisation at high BPM)
-    float beat_period_frames_val_{kFrameHz * 60.0f / kBpmPriorCenter};
+    // ------------------------------------------------------------------
+    // Algorithmic helpers — public static for unit testability.
+    // Each is documented at its definition below.
+    // ------------------------------------------------------------------
 
-    // Beat-phase accumulator — driven by DP predictor when locked, otherwise
-    // advances at 1/beat_period per frame as a free-running fallback.
+    // adaptive_threshold(): subtract local moving-mean from x[0..N-1] and
+    // clamp at zero, in-place. Used by calculateTempo() in the reference
+    // BEFORE the autocorrelation step (to remove DC bias from the onset
+    // detection function so beat-period peaks aren't swamped) and also on
+    // the comb-filterbank output before Viterbi tempo selection.
+    //
+    // Window: 8 samples before, 7 samples after each position, clipped at
+    // [0, N-1] at edges. The "mean" matches the reference's mean_array():
+    // negatives contribute zero to the sum, but the divisor is the full
+    // window length (so a window full of negatives produces a near-zero
+    // threshold rather than a meaningless value).
+    //
+    // `scratch` must point to at least N floats; supplied by the caller so
+    // production callers can route through a class-member buffer (FFT-task
+    // stack budget is 6 KB, no room for 2 KB stack-locals here).
+    static void adaptive_threshold(float *x, int N, float *scratch);
+
+    // balanced_acf(): linear autocorrelation of `in[0..N-1]`, written to
+    // `out[0..N-1]`. Each lag is normalised by the number of valid pairs
+    // (N - lag) — i.e. the unbiased / "balanced" estimator. Without this
+    // normalisation, small lags would dominate purely because more pairs
+    // contribute to the sum.
+    //
+    // The reference computes this via FFT (FFT(|FFT(zero-padded x)|²) /
+    // (N - lag)). We compute it directly in the time domain — O(N²), but
+    // for N=512 that's 262 K multiplies per call, well within the FFT
+    // task's per-beat budget on ESP32-S3. Output is a constant factor 1/N
+    // below the reference's (FFT-based output is N × the time-domain
+    // ACF); since downstream operations look at relative peaks, the
+    // factor is irrelevant for tempo detection.
+    //
+    // `in` and `out` may NOT alias.
+    static void balanced_acf(const float *in, int N, float *out);
+
+    // rayleigh_weights(): fill out[0..N-1] with the Rayleigh distribution
+    //   w[n] = (n / r²) · exp(-n² / 2r²)
+    // which peaks at n = r and decays smoothly above and below. Used as the
+    // tempo prior in the comb filterbank: r = 43 frames at 86.13 fps means
+    // the prior peaks at ~120 BPM. w[0] = 0 (the n factor zeroes it).
+    static void rayleigh_weights(float r, int N, float *out);
+
+    // comb_filterbank(): given the balanced ACF of the onset DF, score each
+    // candidate beat-period T by summing ACF energy at T and its first three
+    // harmonics, weighted by the Rayleigh prior at T. Sharper peaks than the
+    // raw ACF.
+    //
+    // For each period candidate i (0-based, frame value = i+1), the output is
+    //   out[i] = w[i] · Σ_{a=1..4} (1 / (2a-1)) · Σ_{b=-(a-1)..(a-1)} acf[a*i + a + b - 1]
+    // where indices in `acf` outside [0, acf_len) are treated as zero.
+    //
+    // The "+a-1" offset comes from the reference's 1-based-to-0-based
+    // translation (a known off-by-one in adamstark/BTrack; harmless because
+    // it shifts every candidate uniformly so argmax is unaffected).
+    static void comb_filterbank(const float *acf, int acf_len,
+                                const float *weights, int n_periods,
+                                float *out);
+
+    // build_tempo_observation(): for each candidate i in [0, n_candidates),
+    // sample the comb filterbank at the period for BPM = 80 + 2i, plus the
+    // period for double-tempo BPM = 160 + 4i, and write the sum to obs[i].
+    //
+    //   lag_base   = round(kTempoToLagFactor / (2i + 80))
+    //   lag_double = round(kTempoToLagFactor / (4i + 160))
+    //   obs[i] = comb_fb[lag_base - 1] + comb_fb[lag_double - 1]
+    //
+    // The "(lag - 1)" indexing replicates the reference's 1-based-to-0-based
+    // off-by-one (consistent with comb_filterbank's same offset, so ACF
+    // peaks land at the right candidate).
+    static void build_tempo_observation(const float *comb_fb, int n_periods,
+                                        float *obs, int n_candidates);
+
+    // build_tempo_transition_matrix(): fill tm[n×n] (row-major) with the
+    // Gaussian-in-candidate-index-space transition matrix used by the
+    // Viterbi step. tm[i*n + j] = exp(-0.5 * ((j - i)/sigma)²). Unnormalised.
+    static void build_tempo_transition_matrix(float sigma, int n_candidates,
+                                              float *tm);
+
+    // viterbi_step(): one Viterbi forward update.
+    //   delta_out[j] = obs[j] * max_i(prev_delta[i] * tm[i*n + j])
+    // Output is normalised to sum to 1 (so successive calls don't drift to
+    // zero/inf). prev_delta and delta_out may NOT alias.
+    static void viterbi_step(const float *prev_delta, const float *obs,
+                             const float *tm, int n_candidates,
+                             float *delta_out);
+
+    // log_gaussian_weights(): build the log-Gaussian transition window used
+    // by the cumulative-score DP step and predict_beat.
+    //
+    //   v starts at -2 · beat_period; for each sample i in [0, n):
+    //     w[i] = exp(-0.5 · (tightness · log(-v / beat_period))²)
+    //     v += 1
+    //
+    // The peak (w = 1) occurs at v = -beat_period, i.e. index ≈ beat_period.
+    // Below -2·beat_period the input to log() goes negative; the function
+    // returns 0 for those positions to avoid NaN.
+    static void log_gaussian_weights(float beat_period, float tightness,
+                                     int n, float *out);
+
+    // Cumulative-score parameters.
+    //   kAlpha     : past/present blend in the DP step (reference: 0.9)
+    //   kTightness : log-Gaussian tightness (reference: 5)
+    static constexpr float kAlpha = 0.9f;
+    static constexpr float kTightness = 5.0f;
+
+ private:
+    // ---- Stateful per-frame work ----
+    int   history_write_{0};            // ring head (next slot to write)
+    int   frames_since_reset_{0};
+    float onset_history_[kHistoryLen]{};       // onset DF ring (oldest at history_write_, newest at history_write_-1)
+    float cumulative_score_[kHistoryLen]{};    // DP ring (same indexing as onset_history_)
+
+    // ---- Tempo state ----
+    float current_bpm_{120.0f};
     float beat_phase_{0.0f};
-    uint16_t frames_above_lock_{0};
-    uint16_t frames_below_lock_{0};
-    // Count of consecutive near-zero onset frames — used to fast-drop confidence
-    // during silence without having to wait for the onset ring buffer (~5.95s) to
-    // fully flush. Threshold of kZeroOnsetEps mirrors SuperFlux's no-event floor.
-    uint16_t zero_onset_streak_{0};
-    static constexpr float kZeroOnsetEps = 1e-4f;
+    float current_confidence_{0.0f};
+    float beat_period_frames_val_{kFrameHz * 60.0f / 120.0f};  // ≈43
 
-    // Comb-filterbank / Viterbi tempo-tracking scratch + state.
-    float acf_[kHistoryLen]{};                 // balanced autocorrelation
-    float weighting_vector_[kCombFbSize]{};    // Rayleigh prior
-    float comb_fb_out_[kCombFbSize]{};
+    // ---- Beat-prediction timers (count down per frame) ----
+    int   time_to_next_beat_{-1};       // frames until next predicted beat (0 = beat fires this frame)
+    int   time_to_next_prediction_{10}; // frames until next predict_beat() call
+
+    // ---- Precomputed lookup tables (initialised lazily on first reset) ----
+    bool  tables_init_{false};
+    float weighting_vector_[kCombFbSize]{};                       // Rayleigh tempo prior
+    float transition_matrix_[kTempoCandidates * kTempoCandidates]{};
+    float prev_delta_[kTempoCandidates]{};
+
+    // ---- Scratch buffers (class members, not stack locals — FFT task has 6 KB stack) ----
+    float threshold_scratch_[kHistoryLen]{};                      // adaptive_threshold scratch
+    float acf_buf_[kHistoryLen]{};                                // time-ordered onset DF for ACF
+    float acf_[kHistoryLen]{};                                    // ACF output
+    float comb_fb_[kCombFbSize]{};
     float tempo_obs_[kTempoCandidates]{};
     float delta_[kTempoCandidates]{};
-    float prev_delta_[kTempoCandidates]{};
-    float tempo_tm_[kTempoCandidates][kTempoCandidates]{};   // transition matrix
-    bool  tempo_tables_init_{false};
+    float log_gauss_scratch_[kLogGaussMaxLen]{};                  // for cumulative_score / predict_beat
+    float future_scratch_[kHistoryLen + kMaxFutureFrames]{};      // linearised cumulative_score + future
 
-    // DP cumulative-score state.
-    float cumulative_score_[kHistoryLen]{};
-    // timeToNextBeat counts down in frames — 0 on the frame a beat is "due".
-    // Negative before the first prediction fires.
-    int16_t time_to_next_beat_{-1};
-    // timeToNextPrediction counts down to the next predictBeat() call.
-    int16_t time_to_next_prediction_{10};
-
-    // Scratch buffers — class members instead of stack locals because the
-    // FFT task's stack is only 6144 bytes (xTaskCreatePinnedToCore in
-    // audio_reactive.cpp). A single 2 KB stack-local would already eat a
-    // third of that budget; multiple in the same call chain would overflow.
-    //
-    // Sizing rationale:
-    //   future_cs_       — linearised cumulative score (kHistoryLen) + a
-    //                      synthesised future window (max ~220 frames at
-    //                      60 BPM). Used by predict_beat_().
-    //   log_gauss_       — log-Gaussian weights for predict_beat_(). Max
-    //                      past-window length is ~1.5 × max beat period
-    //                      at 60 BPM ≈ 129 frames; 256 gives headroom.
-    //                      Also reused by update_cumulative_score_() —
-    //                      its win_size never exceeds ~1.5 × beat_period
-    //                      ≈ 96 frames at 80 BPM.
-    //   acf_buf_         — linearised onset history for autocorrelation
-    //                      in calculate_balanced_acf_(). Size = kHistoryLen.
-    //   threshold_scratch_ — local-mean buffer used by adaptive_threshold_().
-    //                        Sized to the largest input it operates on
-    //                        (kHistoryLen, since it runs on acf_).
-    static constexpr uint16_t kMaxFutureFrames = 220;
-    static constexpr uint16_t kLogGaussMaxLen = 256;
-    float future_cs_[kHistoryLen + kMaxFutureFrames]{};
-    float log_gauss_[kLogGaussMaxLen]{};
-    float acf_buf_[kHistoryLen]{};
-    float threshold_scratch_[kHistoryLen]{};
-
-    // Algorithmic pieces (adamstark/BTrack port, adapted for our streaming input).
-    void init_tempo_tables_();
-    void update_tempo_estimate_();           // 43-frame cadence tempo induction
+    // ---- Internal helpers ----
+    void init_tables_();
     void update_cumulative_score_(float onset);
     void predict_beat_();
-    // Helpers
-    void calculate_balanced_acf_();
-    void calculate_comb_fb_();
-    void adaptive_threshold_(float *x, uint16_t n);
-    static float mean_slice_(const float *x, uint16_t lo, uint16_t hi);  // [lo,hi]
-    static void normalise_(float *x, uint16_t n);
-    static void make_log_gaussian_weights_(float *w, uint16_t n, float beat_period);
-    // Compute cumulative-score value at a new position given the past ring.
-    // windowStart/windowEnd indices into cumulative_score_ ring-space (linear offsets
-    // from 'oldest'). Returns (1-alpha)*onset + alpha * max(past * log_gauss).
-    static float cumulative_score_value_(const float *cs_linear, uint16_t buf_size,
-                                         const float *log_gauss, int32_t start_idx,
-                                         int32_t end_idx, float onset, float alpha);
-
-    // Return period (frames/beat) for current_bpm_.
-    float beat_period_frames_() const { return beat_period_frames_val_; }
+    // Run one full tempo-induction pass: linearise onset_history_,
+    // adaptive_threshold → balanced_acf → comb_filterbank →
+    // adaptive_threshold → build_tempo_observation → viterbi_step,
+    // then derive BPM and confidence from the argmax of the new delta.
+    // Per the reference, this runs once per beat (when time_to_next_beat
+    // hits zero in process()).
+    void update_tempo_estimate_();
 };
 
-// Implementation — inlined to keep single-header.
+// ----------------------------------------------------------------------
+// Implementation — single-header inline.
+// ----------------------------------------------------------------------
 
-inline void BTrack::init_tempo_tables_() {
-    // Rayleigh weighting vector: peaks at n = rayleighParameter (~120 BPM).
-    for (uint16_t n = 0; n < kCombFbSize; n++) {
-        float nf = static_cast<float>(n);
-        weighting_vector_[n] = (nf / (kRayleighParameter * kRayleighParameter)) *
-                               expf(-(nf * nf) / (2.0f * kRayleighParameter * kRayleighParameter));
-    }
-    // Tempo transition matrix: Gaussian in candidate-index space, centred on each
-    // previous candidate. Reference uses a Gaussian with sigma ~= 5.125.
-    for (uint16_t i = 0; i < kTempoCandidates; i++) {
-        for (uint16_t j = 0; j < kTempoCandidates; j++) {
-            float diff = static_cast<float>(j) - static_cast<float>(i);
-            tempo_tm_[i][j] = expf(-0.5f * (diff * diff) / (kTempoSigma * kTempoSigma));
-        }
-    }
-    // Initial prevDelta = uniform 1.0 across all candidates, matching
-    // adamstark's reference (`std::fill(prevDelta.begin(), prevDelta.end(), 1)`).
-    // No prior bias toward any tempo — observations alone determine the
-    // first lock. Earlier we had a Gaussian centered on i=20 (120 BPM) which
-    // biased the lock toward 114-120 BPM regardless of the music.
-    for (uint16_t i = 0; i < kTempoCandidates; i++) {
-        prev_delta_[i] = 1.0f;
-    }
-    tempo_tables_init_ = true;
+inline void BTrack::init_tables_() {
+    rayleigh_weights(43.0f, kCombFbSize, weighting_vector_);
+    build_tempo_transition_matrix(kTempoSigma, kTempoCandidates, transition_matrix_);
+    for (int i = 0; i < kTempoCandidates; i++) prev_delta_[i] = 1.0f;  // uniform initial prior
+    tables_init_ = true;
 }
 
 inline void BTrack::reset() {
-    for (uint16_t i = 0; i < kHistoryLen; i++) {
+    history_write_ = 0;
+    frames_since_reset_ = 0;
+    for (int i = 0; i < kHistoryLen; i++) {
         onset_history_[i] = 0.0f;
         cumulative_score_[i] = 0.0f;
     }
-    history_write_ = 0;
-    frames_since_reset_ = 0;
-    current_bpm_ = kBpmPriorCenter;
-    current_confidence_ = 0.0f;
-    beat_period_frames_val_ = kFrameHz * 60.0f / kBpmPriorCenter;
+    current_bpm_ = 120.0f;
     beat_phase_ = 0.0f;
-    frames_above_lock_ = 0;
-    frames_below_lock_ = 0;
-    zero_onset_streak_ = 0;
+    current_confidence_ = 0.0f;
+    beat_period_frames_val_ = kFrameHz * 60.0f / 120.0f;  // ≈43
     time_to_next_beat_ = -1;
     time_to_next_prediction_ = 10;
-    if (!tempo_tables_init_) init_tempo_tables_();
-    // Reset Viterbi prior to uniform 1.0 (matches adamstark reference).
-    for (uint16_t i = 0; i < kTempoCandidates; i++) {
-        prev_delta_[i] = 1.0f;
+    if (!tables_init_) {
+        init_tables_();
+    } else {
+        // Re-seed Viterbi prior to uniform 1.0 (matches reset semantics).
+        for (int i = 0; i < kTempoCandidates; i++) prev_delta_[i] = 1.0f;
     }
 }
 
 inline BTrack::Result BTrack::process(float onset_strength) {
-    if (!tempo_tables_init_) init_tempo_tables_();
+    if (!tables_init_) init_tables_();
 
-    // Push into ring buffer.
+    // 1) Push onset into ring at history_write_.
     onset_history_[history_write_] = onset_strength;
+
+    // 2) Update cumulative score at the same ring slot. Both arrays now
+    //    align time-wise.
+    update_cumulative_score_(onset_strength);
+
+    // 3) Advance ring head AFTER both writes — so next frame's "0 frames
+    //    in the past" maps to this frame's slot.
     history_write_ = (history_write_ + 1) % kHistoryLen;
     frames_since_reset_++;
 
-    // Silence fast-path: track consecutive near-zero onsets. The ACF-based
-    // confidence would otherwise stay high until the ring buffer flushes (~5.95s).
-    if (onset_strength < kZeroOnsetEps) {
-        zero_onset_streak_++;
-    } else {
-        zero_onset_streak_ = 0;
-    }
-
-    // DP cumulative-score update (cheap per-frame work).
-    update_cumulative_score_(onset_strength);
-
-    // Countdown timers for beat prediction / arrival.
+    // 4) Tick timers. predict_beat() is called when the prediction timer
+    //    expires; the per-beat tempo induction (Viterbi over ACF →
+    //    comb FB) runs when the beat timer reaches zero — that's the
+    //    reference's event-driven cadence (vs. the broken every-43-frames
+    //    schedule in the previous port).
     time_to_next_prediction_--;
     time_to_next_beat_--;
-
-    bool dp_beat_due = (time_to_next_beat_ == 0);
-
-    // Predict the next beat when the prediction timer expires.
     if (time_to_next_prediction_ <= 0) {
         predict_beat_();
     }
-
-    // Re-estimate tempo every ~0.5s (43 frames). Keeps behaviour stable across
-    // silence; reference BTrack runs this per-beat which is noisy during silence.
-    if (frames_since_reset_ % 43 == 0) {
+    if (time_to_next_beat_ == 0) {
         update_tempo_estimate_();
     }
 
-    // Fast-path silence override. Reset current_bpm_ to the prior AND reseed
-    // prev_delta_ to uniform 1.0 (matches adamstark reset semantics) so a
-    // stale pre-silence lock doesn't carry through to the next music window
-    // via the transition matrix.
-    if (zero_onset_streak_ >= kSilenceHoldFrames) {
-        current_confidence_ = 0.0f;
-        current_bpm_ = kBpmPriorCenter;
-        beat_period_frames_val_ = kFrameHz * 60.0f / kBpmPriorCenter;
-        for (uint16_t i = 0; i < kTempoCandidates; i++) {
-            prev_delta_[i] = 1.0f;
-        }
-    }
+    const bool beat_due = (time_to_next_beat_ == 0);
 
-    // Advance beat phase. During a strong DP lock we align the phase with the
-    // DP prediction; otherwise it free-runs using the current beat period.
-    float period = beat_period_frames_();
-    if (period < 1.0f) period = 1.0f;
-    beat_phase_ += 1.0f / period;
-
-    bool event = false;
-    if (dp_beat_due && current_confidence_ >= kLockConfidence) {
-        // Snap phase to a beat on DP's predicted beat frame.
+    // Beat phase: free-running between events; snaps to 0 on each beat.
+    float bp = beat_period_frames_val_;
+    if (bp < 1.0f) bp = 1.0f;
+    if (beat_due) {
         beat_phase_ = 0.0f;
-        event = true;
-    } else if (beat_phase_ >= 1.0f) {
-        beat_phase_ -= 1.0f;
-        event = true;
-    }
-
-    // Cold-start + silence/lock suppression.
-    bool cold_start = frames_since_reset_ < kWarmupFrames;
-    if (cold_start) {
-        current_confidence_ = 0.0f;
-    }
-    if (current_confidence_ >= kLockConfidence) {
-        frames_above_lock_++;
-        frames_below_lock_ = 0;
     } else {
-        frames_below_lock_++;
-        frames_above_lock_ = 0;
+        beat_phase_ += 1.0f / bp;
+        if (beat_phase_ >= 1.0f) beat_phase_ -= 1.0f;
     }
-    bool suppress_event = cold_start ||
-                          frames_above_lock_ < kMinLockFrames ||
-                          (current_confidence_ < kSilenceConfidence && frames_below_lock_ >= kSilenceHoldFrames);
 
-    return { current_bpm_, beat_phase_, current_confidence_, event && !suppress_event };
+    return { current_bpm_, beat_phase_, current_confidence_, beat_due };
 }
 
-// Compute balanced autocorrelation of onset_history_. Output is normalised so
-// that acf_[lag] is the mean product of pairs separated by `lag` over the
-// valid overlap region. Equivalent to reference calculateBalancedACF().
-inline void BTrack::calculate_balanced_acf_() {
-    // Linearise ring into time-ordered form: oldest at index 0, newest at N-1.
-    // Uses the class-member acf_buf_ scratch (was a 2 KB stack-local) so this
-    // function fits comfortably in the FFT task's 6 KB stack budget.
-    for (uint16_t i = 0; i < kHistoryLen; i++) {
-        acf_buf_[i] = onset_history_[(history_write_ + i) % kHistoryLen];
-    }
-    // Adaptive threshold on the onset DF BEFORE computing ACF, matching
-    // adamstark's calculateTempo() ordering. This subtracts the local moving
-    // mean so the DC component (always-positive SuperFlux baseline) doesn't
-    // smear ACF energy across all lags. Without this step the ACF is
-    // dominated by the DC bias and legitimate beat-period peaks are buried —
-    // which was the root cause of BTrack locking on the wrong candidate
-    // (e.g. 114 BPM regardless of the actual song tempo).
-    adaptive_threshold_(acf_buf_, kHistoryLen);
-    for (uint16_t lag = 0; lag < kHistoryLen; lag++) {
-        float sum = 0.0f;
-        uint16_t count = kHistoryLen - lag;
-        for (uint16_t i = 0; i < count; i++) {
-            sum += acf_buf_[i] * acf_buf_[i + lag];
-        }
-        acf_[lag] = (count > 0) ? (sum / static_cast<float>(count)) : 0.0f;
-    }
-}
-
-// Comb filterbank output — ported directly from adamstark/BTrack
-// calculateOutputOfCombFilterBank(). combFilterBankOutput[T] sums contributions
-// from lags (T, 2T, 3T, 4T) with neighbourhood weighting, scaled by the
-// Rayleigh prior at T. Sharper peaks than plain ACF.
-inline void BTrack::calculate_comb_fb_() {
-    for (uint16_t k = 0; k < kCombFbSize; k++) comb_fb_out_[k] = 0.0f;
-    constexpr int kNumCombElements = 4;
-    for (int i = 2; i <= kCombFbSize - 1; i++) {           // T = 2..127
-        float w = weighting_vector_[i - 1];
-        for (int a = 1; a <= kNumCombElements; a++) {
-            for (int b = 1 - a; b <= a - 1; b++) {
-                int lag_idx = a * i + b - 1;
-                if (lag_idx < 0 || lag_idx >= static_cast<int>(kHistoryLen)) continue;
-                comb_fb_out_[i - 1] += (acf_[lag_idx] * w) / static_cast<float>(2 * a - 1);
-            }
-        }
-    }
-}
-
-inline float BTrack::mean_slice_(const float *x, uint16_t lo, uint16_t hi) {
-    // [lo, hi] inclusive (reference uses 1-based inclusive; caller adjusts).
-    if (hi < lo) return 0.0f;
-    float sum = 0.0f;
-    for (uint16_t i = lo; i <= hi; i++) sum += x[i];
-    return sum / static_cast<float>(hi - lo + 1);
-}
-
-// Reference adaptiveThreshold(): subtract local mean (pre=8, post=7) and
-// clamp at zero. Flattens broadband energy so peaks stand out.
-inline void BTrack::adaptive_threshold_(float *x, uint16_t N) {
-    constexpr int p_pre = 8;
-    constexpr int p_post = 7;
-    // Reuses the class-member threshold_scratch_ (was a 2 KB stack-local).
-    // Sized to kHistoryLen which is the largest N this method ever runs on
-    // (it's also called with N=kCombFbSize=128 — uses just a prefix slice).
-    float *thresh = threshold_scratch_;
-    for (uint16_t i = 0; i < N; i++) thresh[i] = 0.0f;
-    int t = std::min<int>(N, p_post);
-    for (int i = 0; i <= t; i++) {
-        int k = std::min<int>(i + p_pre, N - 1);
-        thresh[i] = mean_slice_(x, 0, static_cast<uint16_t>(k));
-    }
-    for (int i = t + 1; i < static_cast<int>(N) - p_post; i++) {
-        thresh[i] = mean_slice_(x, static_cast<uint16_t>(i - p_pre), static_cast<uint16_t>(i + p_post));
-    }
-    for (int i = static_cast<int>(N) - p_post; i < static_cast<int>(N); i++) {
-        int k = std::max<int>(i - p_post, 0);
-        thresh[i] = mean_slice_(x, static_cast<uint16_t>(k), static_cast<uint16_t>(N - 1));
-    }
-    for (uint16_t i = 0; i < N; i++) {
-        x[i] -= thresh[i];
-        if (x[i] < 0.0f) x[i] = 0.0f;
-    }
-}
-
-inline void BTrack::normalise_(float *x, uint16_t n) {
-    float sum = 0.0f;
-    for (uint16_t i = 0; i < n; i++) sum += x[i];
-    if (sum > 0.0f) {
-        for (uint16_t i = 0; i < n; i++) x[i] /= sum;
-    }
-}
-
-// Tempo induction — comb filterbank + Viterbi over candidate tempi.
-// Ported from reference calculateTempo(). Candidate i -> lag (2*i + 80),
-// i.e. beat periods 80..160 frames → 32..64 BPM — wait, that's wrong range.
-// Reference: tempoToLagFactor = 60 * 44100 / 512 = 5168.
-// tempoIndex1 = round(tempoToLagFactor / (2*i + 80))
-//   i=0 → 5168/80 = 65 (lag-idx, 1-based) → ~80 BPM
-//   i=40 → 5168/160 = 32 → ~160 BPM
-// But the RESAMPLED DF in reference is at 128 lags not our 512 — so indices are
-// DIFFERENT. In reference they resample to 512 samples spanning 128 lag bins
-// somehow. Here we use our raw onset buffer: lag is directly in our frames.
-// At 86 Hz, 120 BPM → 43 frames; 60 BPM → 86 frames; 180 BPM → 28.7 frames.
-// We keep the reference formula since our framerate matches (hop=512, Fs=44.1k).
-inline void BTrack::update_tempo_estimate_() {
-    constexpr float kTempoToLagFactor = 60.0f * 44100.0f / 512.0f;  // 5168.0, reference
-
-    // Adaptive thresholding now lives inside calculate_balanced_acf_() (acts
-    // on the onset DF before ACF, matching the reference adamstark order).
-    // The ACF itself is not thresholded — doing so distorted the natural
-    // peak-at-zero-lag structure and was a port error.
-    calculate_balanced_acf_();
-    calculate_comb_fb_();
-    adaptive_threshold_(comb_fb_out_, kCombFbSize);
-
-    // Build tempo observation vector. Candidate i spans BPM ~ 5168/(2i+80).
-    // i=0 → 64.6 BPM, i=20 → 43.06 frames → 120 BPM, i=40 → 32.3 frames → 160 BPM.
-    for (uint16_t i = 0; i < kTempoCandidates; i++) {
-        int lag1 = static_cast<int>(roundf(kTempoToLagFactor / static_cast<float>(2 * i + 80)));
-        int lag2 = static_cast<int>(roundf(kTempoToLagFactor / static_cast<float>(4 * i + 160)));
-        lag1 = std::max(1, std::min(lag1, static_cast<int>(kCombFbSize)));
-        lag2 = std::max(1, std::min(lag2, static_cast<int>(kCombFbSize)));
-        tempo_obs_[i] = comb_fb_out_[lag1 - 1] + comb_fb_out_[lag2 - 1];
-    }
-
-    // Viterbi step: delta[j] = obs[j] * max_i(prev_delta[i] * tm[i][j]).
-    for (uint16_t j = 0; j < kTempoCandidates; j++) {
-        float max_val = -1.0f;
-        for (uint16_t i = 0; i < kTempoCandidates; i++) {
-            float v = prev_delta_[i] * tempo_tm_[i][j];
-            if (v > max_val) max_val = v;
-        }
-        delta_[j] = max_val * tempo_obs_[j];
-    }
-    // Guard: if the observation is all-zero (silence/warmup) the product delta_
-    // collapses to zero and the Viterbi state can never recover. Detect that
-    // case and re-seed prev_delta_ with a Gaussian prior centred at 120 BPM,
-    // matching reset() behaviour.
-    float delta_sum = 0.0f;
-    for (uint16_t j = 0; j < kTempoCandidates; j++) delta_sum += delta_[j];
-    if (delta_sum < 1e-9f) {
-        // Re-seed prev_delta_ to uniform 1.0 (adamstark reset semantics).
-        // No prior bias — next non-silent window's observations determine
-        // the lock from scratch.
-        for (uint16_t i = 0; i < kTempoCandidates; i++) {
-            prev_delta_[i] = 1.0f;
-        }
-        // Don't update tempo this round — no information to learn from.
-        // Keep previous current_bpm_ and drop confidence.
-        current_confidence_ = 0.0f;
-        return;
-    }
-
-    normalise_(delta_, kTempoCandidates);
-
-    // Argmax + runner-up for confidence.
-    int best_idx = 0;
-    float best_val = -1.0f;
-    float second_val = 0.0f;
-    for (uint16_t j = 0; j < kTempoCandidates; j++) {
-        if (delta_[j] > best_val) {
-            second_val = best_val;
-            best_val = delta_[j];
-            best_idx = j;
-        } else if (delta_[j] > second_val) {
-            second_val = delta_[j];
-        }
-        prev_delta_[j] = delta_[j];
-    }
-
-    // Map candidate index back to beat period (in frames) and BPM.
-    float beat_period_frames = kTempoToLagFactor / static_cast<float>(2 * best_idx + 80);
-    if (beat_period_frames < 1.0f) beat_period_frames = 1.0f;
-    float bpm = kFrameHz * 60.0f / beat_period_frames;
-    // Guard against candidate-index giving BPM below kBpmMin (shouldn't happen with
-    // indices 0..40 → 64.6..160 BPM), but clamp defensively.
-    if (bpm < kBpmMin) bpm = kBpmMin;
-    if (bpm > kBpmMax) bpm = kBpmMax;
-
-    current_bpm_ = bpm;
-    beat_period_frames_val_ = kFrameHz * 60.0f / bpm;
-
-    // Confidence: peak-neighbourhood mass (best ± 2 bins) vs mean floor.
-    // True tempi often land between candidate bins (e.g. 150 BPM sits
-    // between i=34 and i=35), so a ±2-bin window captures that spread.
-    // Uniform distribution → 5/N mass → conf ≈ 0. Sharp unimodal → conf ≈ 1.
-    float peak_mass = 0.0f;
-    for (int j = best_idx - 2; j <= best_idx + 2; j++) {
-        if (j >= 0 && j < static_cast<int>(kTempoCandidates)) peak_mass += delta_[j];
-    }
-    float uniform_mass = 5.0f / static_cast<float>(kTempoCandidates);
-    float conf = (peak_mass - uniform_mass) / (1.0f - uniform_mass);
-    current_confidence_ = std::min(1.0f, std::max(0.0f, conf));
-}
-
-inline void BTrack::make_log_gaussian_weights_(float *w, uint16_t n, float beat_period) {
-    // Reference createLogGaussianTransitionWeighting(): v starts at -2*beatPeriod,
-    // weight = exp(-0.5 * (tightness * log(-v/beatPeriod))^2). The window runs
-    // from 2 beat-periods in the past to ~0.5 beat-period in the past.
-    if (beat_period < 1.0f) beat_period = 1.0f;
-    float v = -2.0f * beat_period;
-    for (uint16_t i = 0; i < n; i++) {
-        float ratio = -v / beat_period;
-        if (ratio <= 0.0f) ratio = 1e-6f;
-        float a = kTightness * logf(ratio);
-        w[i] = expf(-0.5f * a * a);
-        v += 1.0f;
-    }
-}
-
-inline float BTrack::cumulative_score_value_(const float *cs_linear, uint16_t buf_size,
-                                             const float *log_gauss, int32_t start_idx,
-                                             int32_t end_idx, float onset, float alpha) {
-    float max_val = 0.0f;
-    int32_t n = 0;
-    for (int32_t i = start_idx; i <= end_idx; i++) {
-        if (i >= 0 && i < static_cast<int32_t>(buf_size)) {
-            float v = cs_linear[i] * log_gauss[n];
-            if (v > max_val) max_val = v;
-        }
-        n++;
-    }
-    return (1.0f - alpha) * onset + alpha * max_val;
-}
-
-// Update cumulative-score ring — called every frame (cheap: short window scan).
-// This is the core DP step in BTrack: for each frame, compute a score as a blend
-// of the current onset and the best past score weighted by a log-Gaussian
-// centred where a beat would be expected ~1 beat ago.
 inline void BTrack::update_cumulative_score_(float onset) {
     float bp = beat_period_frames_val_;
     if (bp < 2.0f) bp = 2.0f;
 
-    // Window into the past: [oldest+N - 2*bp, oldest+N - bp/2]
-    // We work in "linear time" order (oldest at 0, newest at N-1).
-    // cs_linear is our ring with oldest = cumulative_score_[history_write_] (since
-    // we store cumulative_score_ in a matching ring — same write index as onset).
-    int32_t N = kHistoryLen;
-    int32_t win_end = N - static_cast<int32_t>(roundf(bp * 0.5f));
-    int32_t win_start = N - static_cast<int32_t>(roundf(2.0f * bp));
-    if (win_start < 0) win_start = 0;
-    if (win_end >= N) win_end = N - 1;
-    int32_t win_size = win_end - win_start + 1;
-    if (win_size < 2) {
-        // Degenerate — just store the onset.
+    // Window covers [bp/2, 2*bp] frames in the past (inclusive).
+    const int win_far  = static_cast<int>(std::round(2.0f * bp));    // furthest in past
+    const int win_near = static_cast<int>(std::round(0.5f * bp));    // closest in past
+    int win_size = win_far - win_near + 1;
+    if (win_size < 2 || win_far >= kHistoryLen) {
+        // Insufficient history (early warmup) — store onset directly.
         cumulative_score_[history_write_] = onset;
         return;
     }
+    if (win_size > kLogGaussMaxLen) win_size = kLogGaussMaxLen;
 
-    // Linearise the past cumulative_score_ ring into a small scratch covering the
-    // window. history_write_ is the slot we'll write into THIS frame (one past
-    // newest); the oldest slot is history_write_ itself (since it wraps).
-    // To avoid large scratch, index the ring directly.
-    //
-    // Uses the class-member log_gauss_ (sized kLogGaussMaxLen=256, more than
-    // enough — win_size = ~1.5 × beat_period_frames_val_ is at most ~96 at
-    // 80 BPM and far less at higher tempos). Was previously a 2 KB stack-local
-    // array which contributed to FFT-task stack pressure.
-    if (static_cast<uint16_t>(win_size) > kLogGaussMaxLen) {
-        // Defensive cap: if some pathological beat period somehow exceeded
-        // the scratch budget we'd corrupt memory. Truncate instead.
-        win_size = kLogGaussMaxLen;
-    }
-    make_log_gaussian_weights_(log_gauss_, static_cast<uint16_t>(win_size), bp);
+    log_gaussian_weights(bp, kTightness, win_size, log_gauss_scratch_);
 
-    // Compute max over window of cumulative_score[i] * log_gauss[n].
+    // Find max of (past_score * log_gauss_weight) over the window. Linear
+    // index 0 of the log-Gaussian corresponds to v = -2bp (furthest past).
     float max_val = 0.0f;
-    for (int32_t k = 0; k < win_size; k++) {
-        int32_t lin = win_start + k;
-        // linear index 0 == history_write_ slot (oldest after we overwrite it)
-        uint16_t ring = static_cast<uint16_t>((history_write_ + lin) % kHistoryLen);
-        float v = cumulative_score_[ring] * log_gauss_[k];
+    for (int i = 0; i < win_size; i++) {
+        const int frames_back = win_far - i;     // i=0 → furthest past
+        const int ring_idx = (history_write_ - frames_back + kHistoryLen) % kHistoryLen;
+        const float v = cumulative_score_[ring_idx] * log_gauss_scratch_[i];
         if (v > max_val) max_val = v;
     }
-    float new_score = (1.0f - kAlpha) * onset + kAlpha * max_val;
+    const float new_score = (1.0f - kAlpha) * onset + kAlpha * max_val;
     cumulative_score_[history_write_] = new_score;
 }
 
-// Predict the next beat using DP over an extrapolated cumulative-score window.
-// Ported from reference predictBeat(). We look ~0.5 beat-periods into the future
-// and find the peak of (future_cumulative_score * beat_expectation_window),
-// then set time_to_next_beat_ to that offset in frames.
 inline void BTrack::predict_beat_() {
     float bp = beat_period_frames_val_;
     if (bp < 2.0f) bp = 2.0f;
-    int16_t expectation_window = static_cast<int16_t>(bp);
-    if (expectation_window < 2) expectation_window = 2;
-    if (expectation_window > static_cast<int16_t>(kHistoryLen)) {
-        expectation_window = kHistoryLen;
+
+    int future_window = static_cast<int>(std::round(bp));
+    if (future_window < 2) future_window = 2;
+    if (future_window > kMaxFutureFrames) future_window = kMaxFutureFrames;
+
+    // 1) Linearise cumulative_score ring into future_scratch_[0 .. kHistoryLen-1]
+    //    in time-order (oldest at 0, newest at kHistoryLen-1). After
+    //    process() has advanced history_write_, that slot holds the
+    //    OLDEST data we still have; the newest sits at history_write_-1.
+    for (int i = 0; i < kHistoryLen; i++) {
+        future_scratch_[i] = cumulative_score_[(history_write_ + i) % kHistoryLen];
     }
 
-    // future_cs_ (class member): first kHistoryLen = current cumulative_score
-    // in linear form, then next `expectation_window` samples = synthesised future.
-    // Class member (not stack local) — the FFT task stack is only 6144 bytes.
+    // 2) Past-window log-Gaussian weights — same shape as in update_cumulative_score_,
+    //    but reused to extrapolate FUTURE samples into future_scratch_[kHistoryLen..].
+    const int win_far  = static_cast<int>(std::round(2.0f * bp));
+    const int win_near = static_cast<int>(std::round(0.5f * bp));
+    int win_size = win_far - win_near + 1;
+    if (win_size < 2) {
+        time_to_next_beat_ = static_cast<int>(std::round(bp * 0.5f));
+        time_to_next_prediction_ = time_to_next_beat_ + static_cast<int>(std::round(bp * 0.5f));
+        if (time_to_next_prediction_ < 1) time_to_next_prediction_ = 1;
+        return;
+    }
+    if (win_size > kLogGaussMaxLen) win_size = kLogGaussMaxLen;
+    log_gaussian_weights(bp, kTightness, win_size, log_gauss_scratch_);
 
-    // Linearise cumulative_score into time order (oldest→newest).
-    for (uint16_t i = 0; i < kHistoryLen; i++) {
-        future_cs_[i] = cumulative_score_[(history_write_ + i) % kHistoryLen];
+    // 3) Synthesise future cumulative score (alpha=1, onset=0):
+    //    future_cs[N+f] = max over i in [N+f-win_far, N+f-win_near] of
+    //                       future_cs[i] * log_gauss[(N+f - win_far) - i offset]
+    //    Equivalently: for each future frame f, slide the past window forward
+    //    by f, take max(past_window * weights).
+    for (int f = 0; f < future_window; f++) {
+        const int lookback_far = kHistoryLen + f - win_far;   // furthest past index in linear array
+        float max_val = 0.0f;
+        for (int i = 0; i < win_size; i++) {
+            const int idx = lookback_far + i;
+            if (idx < 0 || idx >= kHistoryLen + future_window) continue;
+            const float v = future_scratch_[idx] * log_gauss_scratch_[i];
+            if (v > max_val) max_val = v;
+        }
+        future_scratch_[kHistoryLen + f] = max_val;  // alpha=1, onset=0
     }
 
-    int32_t N = kHistoryLen;
-    int32_t start_idx = N - static_cast<int32_t>(roundf(2.0f * bp));
-    int32_t end_idx = N - static_cast<int32_t>(roundf(bp * 0.5f));
-    if (start_idx < 0) start_idx = 0;
-    int32_t past_window_size = end_idx - start_idx + 1;
-    if (past_window_size < 2) {
-        time_to_next_prediction_ = static_cast<int16_t>(bp * 0.5f);
+    // 4) Beat-expectation Gaussian centred at bp/2 frames into the future,
+    //    σ = bp/2. Pick the future frame f that maximises the product.
+    const float half_bp = bp * 0.5f;
+    const float two_sigma2 = 2.0f * half_bp * half_bp;
+    int best_f = static_cast<int>(std::round(half_bp));
+    float best_score = -1.0f;
+    for (int f = 0; f < future_window; f++) {
+        const float dx = (static_cast<float>(f + 1) - half_bp);
+        const float gaussian = std::exp(-(dx * dx) / two_sigma2);
+        const float w = future_scratch_[kHistoryLen + f] * gaussian;
+        if (w > best_score) {
+            best_score = w;
+            best_f = f;
+        }
+    }
+
+    time_to_next_beat_ = best_f;
+    time_to_next_prediction_ = best_f + static_cast<int>(std::round(half_bp));
+    if (time_to_next_prediction_ < 1) time_to_next_prediction_ = 1;
+}
+
+inline void BTrack::update_tempo_estimate_() {
+    // 1) Linearise onset_history_ ring into time-order. After process()
+    //    advanced history_write_, ring[history_write_] is the oldest,
+    //    ring[history_write_-1 mod N] is the newest.
+    for (int i = 0; i < kHistoryLen; i++) {
+        acf_buf_[i] = onset_history_[(history_write_ + i) % kHistoryLen];
+    }
+
+    // 2) Subtract local moving-mean from the onset DF before ACF — this is
+    //    the load-bearing fix that was missing/misordered in the previous
+    //    port. Without it the always-positive SuperFlux baseline produces
+    //    a DC bias that swamps all beat-period peaks in the ACF.
+    adaptive_threshold(acf_buf_, kHistoryLen, threshold_scratch_);
+
+    // 3) Balanced autocorrelation.
+    balanced_acf(acf_buf_, kHistoryLen, acf_);
+
+    // 4) Comb filterbank with Rayleigh prior.
+    comb_filterbank(acf_, kHistoryLen, weighting_vector_, kCombFbSize, comb_fb_);
+
+    // 5) Threshold the comb FB output (matches reference order).
+    adaptive_threshold(comb_fb_, kCombFbSize, threshold_scratch_);
+
+    // 6) Build the 41-element tempo observation vector.
+    build_tempo_observation(comb_fb_, kCombFbSize, tempo_obs_, kTempoCandidates);
+
+    // 7) Viterbi forward step.
+    viterbi_step(prev_delta_, tempo_obs_, transition_matrix_,
+                 kTempoCandidates, delta_);
+
+    // Detect silence / no-information frames: if the observation was all-zero
+    // the Viterbi product collapses to zero and we'd lock onto whatever
+    // (uniform) max_i path won the tie. Re-seed prev_delta to uniform so
+    // the next non-silent window can lock from scratch.
+    float delta_sum = 0.0f;
+    for (int j = 0; j < kTempoCandidates; j++) delta_sum += delta_[j];
+    if (delta_sum < 1e-9f) {
+        for (int j = 0; j < kTempoCandidates; j++) prev_delta_[j] = 1.0f;
+        current_confidence_ = 0.0f;
         return;
     }
 
-    // Log-gaussian weighting window for cumulative-score synthesis.
-    // Use class-member buffer; guard against exceeding its static size.
-    uint16_t pw_clamped = (past_window_size > static_cast<int32_t>(kLogGaussMaxLen))
-                              ? kLogGaussMaxLen
-                              : static_cast<uint16_t>(past_window_size);
-    make_log_gaussian_weights_(log_gauss_, pw_clamped, bp);
+    // 8) Argmax → BPM. Copy delta → prev_delta for next iteration.
+    int best_idx = 0;
+    float best_val = -1.0f;
+    for (int j = 0; j < kTempoCandidates; j++) {
+        if (delta_[j] > best_val) { best_val = delta_[j]; best_idx = j; }
+        prev_delta_[j] = delta_[j];
+    }
+    const float bpm = 80.0f + 2.0f * static_cast<float>(best_idx);
+    current_bpm_ = bpm;
+    beat_period_frames_val_ = kFrameHz * 60.0f / bpm;
 
-    // Synthesise future cumulative score (alpha=1.0, onset=0 as in reference).
-    for (int16_t i = 0; i < expectation_window; i++) {
-        int32_t s = start_idx + i;
-        int32_t e = end_idx + i;
-        float max_val = 0.0f;
-        int32_t n = 0;
-        for (int32_t j = s; j <= e && n < pw_clamped; j++) {
-            if (j >= 0 && j < static_cast<int32_t>(N + expectation_window)) {
-                float v = future_cs_[j] * log_gauss_[n];
-                if (v > max_val) max_val = v;
+    // 9) Confidence: peak-neighbourhood mass relative to the uniform floor.
+    //    Sharp unimodal → conf ≈ 1; flat → conf ≈ 0.
+    float peak_mass = 0.0f;
+    for (int j = best_idx - 2; j <= best_idx + 2; j++) {
+        if (j >= 0 && j < kTempoCandidates) peak_mass += delta_[j];
+    }
+    const float uniform_mass = 5.0f / static_cast<float>(kTempoCandidates);
+    float conf = (peak_mass - uniform_mass) / (1.0f - uniform_mass);
+    if (conf < 0.0f) conf = 0.0f;
+    if (conf > 1.0f) conf = 1.0f;
+    current_confidence_ = conf;
+}
+
+inline void BTrack::adaptive_threshold(float *x, int N, float *scratch) {
+    if (N <= 0) return;
+    constexpr int p_pre = 8;
+    constexpr int p_post = 7;
+
+    // Helper: BTrack's mean_array() — sums positive values in x[lo..hi]
+    // (0-based, both inclusive), divides by `length` (NOT necessarily
+    // hi-lo+1; matches the reference's "stated length" semantics so we
+    // can faithfully replicate edge-case bias).
+    auto positive_mean = [](const float *arr, int lo, int hi, int length) {
+        if (length <= 0) return 0.0f;
+        float sum = 0.0f;
+        for (int j = lo; j <= hi; j++) {
+            if (arr[j] > 0.0f) sum += arr[j];
+        }
+        return sum / static_cast<float>(length);
+    };
+
+    // The reference splits the buffer into three regions and uses 1-based
+    // indexing internally. We reproduce the same window math in 0-based,
+    // clamping to [0, N-1] to avoid the off-by-one OOB read in the
+    // reference's middle loop. Comments quote the reference's 1-based form.
+    const int t = std::min(N, p_post);
+
+    // Edge 1 — i in [0, t]:  mean_array(x, 1, k)  with k = min(i+p_pre, N).
+    // 0-based window: x[0 .. k-1], length = k.
+    for (int i = 0; i <= t && i < N; i++) {
+        const int k = std::min(i + p_pre, N);
+        scratch[i] = positive_mean(x, 0, k - 1, k);
+    }
+
+    // Middle — i in [t+1, N-p_post):
+    //   mean_array(x, i - p_pre, i + p_post)  → 0-based window [i-p_pre-1, i+p_post-1].
+    //   The reference reads x[-1] at i=t+1=8 (undefined behaviour) and
+    //   divides by a fixed length 16 even when only 15 samples are valid.
+    //   That bias breaks DC removal for constant inputs at i=8 (residual
+    //   ≈ 1/16 of the input). We clamp lo at 0 AND use the clamped window
+    //   length as the divisor — a documented deviation from the reference's
+    //   buggy edge behaviour.
+    for (int i = t + 1; i < N - p_post; i++) {
+        int lo = i - p_pre - 1;
+        int hi = i + p_post - 1;
+        if (lo < 0) lo = 0;
+        if (hi >= N) hi = N - 1;
+        const int length = hi - lo + 1;
+        scratch[i] = positive_mean(x, lo, hi, length);
+    }
+
+    // Edge 2 — i in [N-p_post, N):  mean_array(x, k, N) with k = max(i-p_post, 1).
+    // 0-based window: x[k-1 .. N-1], length = N-k+1.
+    for (int i = std::max(0, N - p_post); i < N; i++) {
+        const int k = std::max(i - p_post, 1);
+        const int length = N - k + 1;
+        scratch[i] = positive_mean(x, k - 1, N - 1, length);
+    }
+
+    for (int i = 0; i < N; i++) {
+        x[i] -= scratch[i];
+        if (x[i] < 0.0f) x[i] = 0.0f;
+    }
+}
+
+inline void BTrack::rayleigh_weights(float r, int N, float *out) {
+    if (N <= 0) return;
+    if (r <= 0.0f) {
+        for (int i = 0; i < N; i++) out[i] = 0.0f;
+        return;
+    }
+    const float two_r2 = 2.0f * r * r;
+    const float inv_r2 = 1.0f / (r * r);
+    for (int n = 0; n < N; n++) {
+        const float nf = static_cast<float>(n);
+        out[n] = (nf * inv_r2) * std::exp(-(nf * nf) / two_r2);
+    }
+}
+
+inline void BTrack::comb_filterbank(const float *acf, int acf_len,
+                                    const float *weights, int n_periods,
+                                    float *out) {
+    constexpr int kNumElements = 4;
+    for (int i = 0; i < n_periods; i++) out[i] = 0.0f;
+    if (n_periods < 3) return;  // no valid candidates
+
+    // Reference loops 1-based i ∈ [2, n_periods-1]; in 0-based that's
+    // i ∈ [1, n_periods-2]. The off-by-one in the lag index (a*i + a + b - 1
+    // rather than a*i + a + b) is replicated faithfully — it's a known
+    // adamstark/BTrack quirk that shifts every candidate uniformly so
+    // argmax is unaffected.
+    for (int i = 1; i <= n_periods - 2; i++) {
+        const float w = weights[i];
+        if (w == 0.0f) continue;
+        for (int a = 1; a <= kNumElements; a++) {
+            const float scale = w / static_cast<float>(2 * a - 1);
+            for (int b = 1 - a; b <= a - 1; b++) {
+                const int lag_idx = a * (i + 1) + b - 1;  // 1-based: a*i + b
+                if (lag_idx < 0 || lag_idx >= acf_len) continue;
+                out[i] += acf[lag_idx] * scale;
             }
-            n++;
         }
-        future_cs_[N + i] = max_val;   // alpha=1, onset=0
     }
+}
 
-    // Beat-expectation window: Gaussian centred at bp/2 frames into the future.
-    float best_val = 0.0f;
-    int16_t best_n = static_cast<int16_t>(bp * 0.5f);  // fallback
-    float half_bp = bp * 0.5f;
-    for (int16_t n = 0; n < expectation_window; n++) {
-        float v = static_cast<float>(n + 1);
-        float g = expf(-0.5f * ((v - half_bp) * (v - half_bp)) / (half_bp * half_bp));
-        float w = future_cs_[N + n] * g;
-        if (w > best_val) {
-            best_val = w;
-            best_n = n;
+inline void BTrack::build_tempo_observation(const float *comb_fb, int n_periods,
+                                            float *obs, int n_candidates) {
+    for (int i = 0; i < n_candidates; i++) {
+        const float bpm_base = static_cast<float>(2 * i + 80);
+        const float bpm_double = static_cast<float>(4 * i + 160);
+        int lag1 = static_cast<int>(std::round(kTempoToLagFactor / bpm_base));
+        int lag2 = static_cast<int>(std::round(kTempoToLagFactor / bpm_double));
+        // Clamp to [1, n_periods] so (lag - 1) is a valid 0-based index.
+        if (lag1 < 1) lag1 = 1;
+        if (lag1 > n_periods) lag1 = n_periods;
+        if (lag2 < 1) lag2 = 1;
+        if (lag2 > n_periods) lag2 = n_periods;
+        obs[i] = comb_fb[lag1 - 1] + comb_fb[lag2 - 1];
+    }
+}
+
+inline void BTrack::build_tempo_transition_matrix(float sigma, int n_candidates,
+                                                  float *tm) {
+    if (sigma <= 0.0f) sigma = 1e-3f;  // defensive — divide-by-zero guard
+    const float two_sigma2 = 2.0f * sigma * sigma;
+    for (int i = 0; i < n_candidates; i++) {
+        for (int j = 0; j < n_candidates; j++) {
+            const float diff = static_cast<float>(j - i);
+            tm[i * n_candidates + j] = std::exp(-(diff * diff) / two_sigma2);
         }
     }
-    // Reference sets timeToNextBeat to best_n, then timeToNextPrediction =
-    // timeToNextBeat + bp/2. We do the same; timers count down per frame.
-    time_to_next_beat_ = best_n;
-    time_to_next_prediction_ = best_n + static_cast<int16_t>(roundf(half_bp));
-    if (time_to_next_prediction_ < 1) time_to_next_prediction_ = 1;
+}
+
+inline void BTrack::viterbi_step(const float *prev_delta, const float *obs,
+                                 const float *tm, int n_candidates,
+                                 float *delta_out) {
+    // Forward pass: delta[j] = obs[j] * max_i(prev_delta[i] * tm[i][j]).
+    for (int j = 0; j < n_candidates; j++) {
+        float best = 0.0f;
+        for (int i = 0; i < n_candidates; i++) {
+            const float v = prev_delta[i] * tm[i * n_candidates + j];
+            if (v > best) best = v;
+        }
+        delta_out[j] = obs[j] * best;
+    }
+    // Normalise — keeps successive Viterbi steps numerically stable. If the
+    // observation is all-zero (silence) the sum is 0 and we can't normalise;
+    // leave as zeros and let the caller decide what to do (typically reset
+    // prev_delta back to uniform).
+    float sum = 0.0f;
+    for (int j = 0; j < n_candidates; j++) sum += delta_out[j];
+    if (sum > 0.0f) {
+        const float inv_sum = 1.0f / sum;
+        for (int j = 0; j < n_candidates; j++) delta_out[j] *= inv_sum;
+    }
+}
+
+inline void BTrack::log_gaussian_weights(float beat_period, float tightness,
+                                         int n, float *out) {
+    if (n <= 0) return;
+    if (beat_period < 1.0f) beat_period = 1.0f;
+    float v = -2.0f * beat_period;
+    for (int i = 0; i < n; i++) {
+        const float ratio = -v / beat_period;
+        if (ratio <= 0.0f) {
+            // log() argument would be ≤ 0 — undefined. Force weight to 0
+            // (defensive guard for v ≥ 0; doesn't fire in normal use because
+            // v reaches 0 only at i = 2*beat_period, beyond the typical
+            // window length).
+            out[i] = 0.0f;
+        } else {
+            const float a = tightness * std::log(ratio);
+            out[i] = std::exp(-0.5f * a * a);
+        }
+        v += 1.0f;
+    }
+}
+
+inline void BTrack::balanced_acf(const float *in, int N, float *out) {
+    if (N <= 0) return;
+    for (int lag = 0; lag < N; lag++) {
+        const int valid_pairs = N - lag;  // ≥ 1 for lag < N
+        float sum = 0.0f;
+        for (int n = 0; n < valid_pairs; n++) {
+            sum += in[n] * in[n + lag];
+        }
+        out[lag] = sum / static_cast<float>(valid_pairs);
+    }
 }
 
 }  // namespace audio_reactive
