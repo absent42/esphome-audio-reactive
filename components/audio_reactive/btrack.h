@@ -54,17 +54,12 @@ class BTrack {
     static constexpr uint16_t kTempoCandidates = 41;   // reference uses 41 candidate tempi
     static constexpr float   kRayleighParameter = 43.0f;   // peak of Rayleigh ~ 120 BPM @ 86 Hz
     static constexpr float   kTempoSigma = 41.0f / 8.0f;   // stddev for tempo transition matrix
-    // Width of the INITIAL prior Gaussian (in candidate-index units) when
-    // Viterbi state is seeded at boot, on reset, or when the comb FB
-    // collapses to silence-noise. Deliberately much wider than kTempoSigma
-    // so the initial bias toward 120 BPM (i=20) doesn't drown out
-    // observations for tempos far from 120. With kTempoSigma's value (5.125)
-    // an actual 146 BPM song (i=33, dist 13 from centre) would start with
-    // ~21x lower weight than 114 BPM (i=17, dist 3), and the comb-filter-
-    // bank observation has to overcome that 21x bias before Viterbi flips —
-    // in practice the lock on 114 wins. With kInitialPriorSigma=15 the
-    // ratio drops to ~2x, leaving observations to determine the lock.
-    static constexpr float   kInitialPriorSigma = 15.0f;
+    // Initial prevDelta is uniform 1.0 across all candidates (matching
+    // adamstark's reference). No Gaussian initial prior — observations
+    // alone determine the first lock. An earlier port-error Gaussian
+    // centred on 120 BPM created a strong bias toward index 20 that
+    // prevented other tempos from locking even when the comb-filterbank
+    // observation strongly favoured them. See git log for context.
     static constexpr float   kTightness = 5.0f;            // log-gaussian tightness (reference: 5)
     static constexpr float   kAlpha = 0.9f;                // cumulative-score past/present blend
 
@@ -188,13 +183,13 @@ inline void BTrack::init_tempo_tables_() {
             tempo_tm_[i][j] = expf(-0.5f * (diff * diff) / (kTempoSigma * kTempoSigma));
         }
     }
-    // Seed prior as centred Gaussian on the 120-BPM candidate (index 20 for 41 cands).
-    // Uses kInitialPriorSigma (much wider than kTempoSigma) so the initial bias
-    // toward 120 BPM doesn't drown out observations for tempos far from 120 —
-    // see kInitialPriorSigma's docstring for the math.
+    // Initial prevDelta = uniform 1.0 across all candidates, matching
+    // adamstark's reference (`std::fill(prevDelta.begin(), prevDelta.end(), 1)`).
+    // No prior bias toward any tempo — observations alone determine the
+    // first lock. Earlier we had a Gaussian centered on i=20 (120 BPM) which
+    // biased the lock toward 114-120 BPM regardless of the music.
     for (uint16_t i = 0; i < kTempoCandidates; i++) {
-        float diff = static_cast<float>(i) - 20.0f;
-        prev_delta_[i] = expf(-0.5f * (diff * diff) / (kInitialPriorSigma * kInitialPriorSigma));
+        prev_delta_[i] = 1.0f;
     }
     tempo_tables_init_ = true;
 }
@@ -216,12 +211,9 @@ inline void BTrack::reset() {
     time_to_next_beat_ = -1;
     time_to_next_prediction_ = 10;
     if (!tempo_tables_init_) init_tempo_tables_();
-    // Reset Viterbi prior using the wider kInitialPriorSigma so any tempo
-    // can lock from observations without fighting an overly narrow prior
-    // bias toward 120 BPM.
+    // Reset Viterbi prior to uniform 1.0 (matches adamstark reference).
     for (uint16_t i = 0; i < kTempoCandidates; i++) {
-        float diff = static_cast<float>(i) - 20.0f;
-        prev_delta_[i] = expf(-0.5f * (diff * diff) / (kInitialPriorSigma * kInitialPriorSigma));
+        prev_delta_[i] = 1.0f;
     }
 }
 
@@ -262,19 +254,15 @@ inline BTrack::Result BTrack::process(float onset_strength) {
     }
 
     // Fast-path silence override. Reset current_bpm_ to the prior AND reseed
-    // prev_delta_ with the wide initial prior so a stale pre-silence lock
-    // doesn't bias the next non-silent window. Without the prev_delta_
-    // reseed, Viterbi state survives the silence edge and propagates via the
-    // (intentionally tight) transition matrix — which means a lock that
-    // formed on the wrong candidate before silence will tend to re-form on
-    // that same candidate after silence, defeating the wide initial prior.
+    // prev_delta_ to uniform 1.0 (matches adamstark reset semantics) so a
+    // stale pre-silence lock doesn't carry through to the next music window
+    // via the transition matrix.
     if (zero_onset_streak_ >= kSilenceHoldFrames) {
         current_confidence_ = 0.0f;
         current_bpm_ = kBpmPriorCenter;
         beat_period_frames_val_ = kFrameHz * 60.0f / kBpmPriorCenter;
         for (uint16_t i = 0; i < kTempoCandidates; i++) {
-            float diff = static_cast<float>(i) - 20.0f;
-            prev_delta_[i] = expf(-0.5f * (diff * diff) / (kInitialPriorSigma * kInitialPriorSigma));
+            prev_delta_[i] = 1.0f;
         }
     }
 
@@ -323,6 +311,14 @@ inline void BTrack::calculate_balanced_acf_() {
     for (uint16_t i = 0; i < kHistoryLen; i++) {
         acf_buf_[i] = onset_history_[(history_write_ + i) % kHistoryLen];
     }
+    // Adaptive threshold on the onset DF BEFORE computing ACF, matching
+    // adamstark's calculateTempo() ordering. This subtracts the local moving
+    // mean so the DC component (always-positive SuperFlux baseline) doesn't
+    // smear ACF energy across all lags. Without this step the ACF is
+    // dominated by the DC bias and legitimate beat-period peaks are buried —
+    // which was the root cause of BTrack locking on the wrong candidate
+    // (e.g. 114 BPM regardless of the actual song tempo).
+    adaptive_threshold_(acf_buf_, kHistoryLen);
     for (uint16_t lag = 0; lag < kHistoryLen; lag++) {
         float sum = 0.0f;
         uint16_t count = kHistoryLen - lag;
@@ -411,9 +407,11 @@ inline void BTrack::normalise_(float *x, uint16_t n) {
 inline void BTrack::update_tempo_estimate_() {
     constexpr float kTempoToLagFactor = 60.0f * 44100.0f / 512.0f;  // 5168.0, reference
 
+    // Adaptive thresholding now lives inside calculate_balanced_acf_() (acts
+    // on the onset DF before ACF, matching the reference adamstark order).
+    // The ACF itself is not thresholded — doing so distorted the natural
+    // peak-at-zero-lag structure and was a port error.
     calculate_balanced_acf_();
-    // Adaptive threshold on ACF first (only within the usable lag range).
-    adaptive_threshold_(acf_, kHistoryLen);
     calculate_comb_fb_();
     adaptive_threshold_(comb_fb_out_, kCombFbSize);
 
@@ -443,12 +441,11 @@ inline void BTrack::update_tempo_estimate_() {
     float delta_sum = 0.0f;
     for (uint16_t j = 0; j < kTempoCandidates; j++) delta_sum += delta_[j];
     if (delta_sum < 1e-9f) {
-        // Same wide-prior re-seed as reset() / init_tempo_tables_(). Wider
-        // than kTempoSigma so the next non-silent window can lock to any
-        // tempo without fighting a narrow bias toward 120 BPM.
+        // Re-seed prev_delta_ to uniform 1.0 (adamstark reset semantics).
+        // No prior bias — next non-silent window's observations determine
+        // the lock from scratch.
         for (uint16_t i = 0; i < kTempoCandidates; i++) {
-            float diff = static_cast<float>(i) - 20.0f;
-            prev_delta_[i] = expf(-0.5f * (diff * diff) / (kInitialPriorSigma * kInitialPriorSigma));
+            prev_delta_[i] = 1.0f;
         }
         // Don't update tempo this round — no information to learn from.
         // Keep previous current_bpm_ and drop confidence.
