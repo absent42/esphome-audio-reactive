@@ -667,17 +667,30 @@ inline void BTrack::comb_filterbank(const float *acf, int acf_len,
 
 inline void BTrack::build_tempo_observation(const float *comb_fb, int n_periods,
                                             float *obs, int n_candidates) {
+    // Deviation from the reference: we sample only the lag1 ("base period")
+    // location in the comb filterbank and skip the lag2 ("double-tempo")
+    // sample that the reference adds. Hardware diagnostics on a 152-BPM song
+    // showed the lag2 sum spuriously favouring candidate i=17 (114 BPM):
+    // its lag1 (45) read comb_fb[44] (catching the music's 4x ACF harmonic
+    // via comb_filterbank's a=3 path) AND its lag2 (23) read comb_fb[22]
+    // (catching the 2x ACF harmonic via the a=3 path again). The 152-BPM
+    // candidate (i=35) only had its lag1 land on a comb_fb peak; its lag2
+    // (300 BPM) hit nothing. The dual-sampling thus inherited harmonic mass
+    // from the correct tempo into the wrong candidate.
+    //
+    // The reference includes lag2 to disambiguate octave-confusion cases
+    // (where the music's perceived tempo is the half of its strongest ACF
+    // peak). On music with strong integer-harmonic structure that protection
+    // backfires; we keep lag1-only as our default. Reintroducing lag2
+    // (perhaps as a low-weight contribution rather than a full add) is a
+    // future tuning lever if half-tempo lock-in becomes a problem.
     for (int i = 0; i < n_candidates; i++) {
         const float bpm_base = static_cast<float>(2 * i + 80);
-        const float bpm_double = static_cast<float>(4 * i + 160);
         int lag1 = static_cast<int>(std::round(kTempoToLagFactor / bpm_base));
-        int lag2 = static_cast<int>(std::round(kTempoToLagFactor / bpm_double));
         // Clamp to [1, n_periods] so (lag - 1) is a valid 0-based index.
         if (lag1 < 1) lag1 = 1;
         if (lag1 > n_periods) lag1 = n_periods;
-        if (lag2 < 1) lag2 = 1;
-        if (lag2 > n_periods) lag2 = n_periods;
-        obs[i] = comb_fb[lag1 - 1] + comb_fb[lag2 - 1];
+        obs[i] = comb_fb[lag1 - 1];
     }
 }
 
