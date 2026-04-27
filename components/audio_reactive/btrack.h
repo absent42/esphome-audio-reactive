@@ -261,14 +261,21 @@ inline BTrack::Result BTrack::process(float onset_strength) {
         update_tempo_estimate_();
     }
 
-    // Fast-path silence override. Reset current_bpm_ to the prior so a stale
-    // pre-silence lock isn't fed back to publish-side consumers, and so the
-    // next non-silent window starts tempo induction without that lock biasing
-    // the comb-filterbank weighting toward the previous answer.
+    // Fast-path silence override. Reset current_bpm_ to the prior AND reseed
+    // prev_delta_ with the wide initial prior so a stale pre-silence lock
+    // doesn't bias the next non-silent window. Without the prev_delta_
+    // reseed, Viterbi state survives the silence edge and propagates via the
+    // (intentionally tight) transition matrix — which means a lock that
+    // formed on the wrong candidate before silence will tend to re-form on
+    // that same candidate after silence, defeating the wide initial prior.
     if (zero_onset_streak_ >= kSilenceHoldFrames) {
         current_confidence_ = 0.0f;
         current_bpm_ = kBpmPriorCenter;
         beat_period_frames_val_ = kFrameHz * 60.0f / kBpmPriorCenter;
+        for (uint16_t i = 0; i < kTempoCandidates; i++) {
+            float diff = static_cast<float>(i) - 20.0f;
+            prev_delta_[i] = expf(-0.5f * (diff * diff) / (kInitialPriorSigma * kInitialPriorSigma));
+        }
     }
 
     // Advance beat phase. During a strong DP lock we align the phase with the
