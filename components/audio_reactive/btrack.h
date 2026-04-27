@@ -212,32 +212,36 @@ class BTrack {
     static constexpr float kAlpha = 0.9f;
     static constexpr float kTightness = 5.0f;
 
-    // State-persistence gating (deviation from reference, added 2026-04-27
+    // State-persistence soft blend (deviation from reference, added 2026-04-27
     // after hardware testing showed brief low-onset-strength frames could
     // corrupt the Viterbi prior and lock the system on a wrong tempo).
     //
-    // The reference's calculateTempo() trusts every Viterbi step, even
-    // low-confidence ones. On real-time mic-captured audio that fails:
-    // a single noisy frame produces a noisy delta which then becomes the
-    // prior for subsequent (now mis-anchored) frames, eventually building
-    // up a strong "wrong" lock that survives even when good observations
-    // resume.
+    // The reference's calculateTempo() unconditionally replaces prev_delta
+    // with the new delta on every step. On real-time mic-captured audio
+    // that fails: a single noisy frame produces a noisy delta which then
+    // becomes the prior for subsequent (now mis-anchored) frames, eventually
+    // building up a strong "wrong" lock that survives even when good
+    // observations resume.
     //
-    //   kStateUpdateMinConfidence — confidence threshold below which we
-    //                                hold prev_delta_ unchanged (preserve
-    //                                the previous high-confidence lock).
-    //   kPriorDecayHoldFrames     — # of consecutive sub-threshold updates
-    //                                before the held prior starts decaying.
-    //                                Allows brief transients to pass without
-    //                                degrading the lock.
-    //   kPriorDecayPerStep        — per-update blend toward uniform once
-    //                                decay starts. With 0.10/step a sustained
-    //                                low-confidence period unlocks in ~10
-    //                                further updates (≈4-6 sec at 100-150 BPM),
-    //                                so a real tempo change eventually wins.
-    static constexpr float kStateUpdateMinConfidence = 0.35f;
-    static constexpr int   kPriorDecayHoldFrames = 4;
-    static constexpr float kPriorDecayPerStep = 0.10f;
+    // The reverse problem — a hard gate that simply rejects low-confidence
+    // updates — also fails: it breaks the bootstrap feedback loop where
+    // each frame's delta sharpens prev_delta and thereby sharpens the
+    // next delta. Without that loop the system never escapes a uniform
+    // prior on real music (which often has only mid-confidence locks).
+    //
+    // Soft blend resolves both: prev_delta_ is updated on every step, but
+    // the per-step blend weight equals the new confidence (clamped to a
+    // small floor so a sustained-silence prior doesn't become arbitrarily
+    // sticky). High-conf updates dominate; low-conf transients only shift
+    // the prior by a small fraction, leaving the lock mostly intact.
+    //
+    //   kPriorBlendFloor : minimum blend fraction; ensures prev_delta_
+    //                       continues to evolve even when conf collapses
+    //                       (e.g., during a real tempo change). With 0.03
+    //                       the prior still drifts ~3% toward the new
+    //                       delta per beat in the worst case, so a genuine
+    //                       tempo shift unlocks within ~30 beats.
+    static constexpr float kPriorBlendFloor = 0.03f;
 
  private:
     // ---- Stateful per-frame work ----
@@ -255,9 +259,6 @@ class BTrack {
     // ---- Beat-prediction timers (count down per frame) ----
     int   time_to_next_beat_{-1};       // frames until next predicted beat (0 = beat fires this frame)
     int   time_to_next_prediction_{10}; // frames until next predict_beat() call
-
-    // ---- Confidence-gating state (see kStateUpdateMinConfidence above) ----
-    int   low_conf_streak_{0};          // # of consecutive sub-threshold tempo updates
 
     // ---- Precomputed lookup tables (initialised lazily on first reset) ----
     bool  tables_init_{false};
@@ -312,7 +313,6 @@ inline void BTrack::reset() {
     beat_period_frames_val_ = kFrameHz * 60.0f / 120.0f;  // ≈43
     time_to_next_beat_ = -1;
     time_to_next_prediction_ = 10;
-    low_conf_streak_ = 0;
     if (!tables_init_) {
         init_tables_();
     } else {
@@ -527,30 +527,19 @@ inline void BTrack::update_tempo_estimate_() {
     if (conf > 1.0f) conf = 1.0f;
     current_confidence_ = conf;
 
-    // 10) State-persistence gating: only let high-confidence delta become
-    //     the next frame's prior. On a noisy/transient frame (conf below
-    //     threshold) hold the previous high-confidence prior so the lock
-    //     isn't corrupted by a single bad observation. After a sustained
-    //     low-conf streak the held prior decays toward uniform — that lets
-    //     genuine tempo changes eventually win without making the lock
-    //     totally rigid. See kStateUpdateMinConfidence comment for context
-    //     and hardware-failure background.
-    if (conf >= kStateUpdateMinConfidence) {
-        for (int j = 0; j < kTempoCandidates; j++) prev_delta_[j] = delta_[j];
-        low_conf_streak_ = 0;
-    } else {
-        low_conf_streak_++;
-        if (low_conf_streak_ > kPriorDecayHoldFrames) {
-            const int decay_steps = low_conf_streak_ - kPriorDecayHoldFrames;
-            float decay = decay_steps * kPriorDecayPerStep;
-            if (decay > 1.0f) decay = 1.0f;
-            const float uniform = 1.0f / static_cast<float>(kTempoCandidates);
-            for (int j = 0; j < kTempoCandidates; j++) {
-                prev_delta_[j] = (1.0f - decay) * prev_delta_[j] + decay * uniform;
-            }
-        }
-        // else: hold prev_delta_ unchanged for the first kPriorDecayHoldFrames
-        // sub-threshold updates — preserves transient-tolerant lock.
+    // 10) Soft-blend prev_delta_. blend ∝ confidence so:
+    //       - High-conf frames update prev_delta_ almost fully (matches
+    //         reference behaviour on clean signals).
+    //       - Low-conf transients only nudge the prior by a small fraction,
+    //         leaving an established lock mostly intact across one bad frame.
+    //       - The kPriorBlendFloor keeps progress nonzero so a genuine
+    //         tempo change (sustained low conf at the new tempo) eventually
+    //         takes over.
+    float blend = conf;
+    if (blend < kPriorBlendFloor) blend = kPriorBlendFloor;
+    if (blend > 1.0f) blend = 1.0f;
+    for (int j = 0; j < kTempoCandidates; j++) {
+        prev_delta_[j] = blend * delta_[j] + (1.0f - blend) * prev_delta_[j];
     }
 }
 
