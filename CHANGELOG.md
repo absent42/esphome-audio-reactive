@@ -22,6 +22,18 @@ All notable changes to the ESPHome Audio Reactive component will be documented i
   frames on a fixed cadence, matching the reference's event-driven design.
   The full re-derivation lives in [btrack.h](components/audio_reactive/btrack.h),
   driven test-first by 14 unit tests in `test/test_btrack/test_btrack.cpp`.
+- Confidence-gated Viterbi state persistence (deviation from the reference,
+  added after the rewrite locked correctly at 140 BPM on a 146-BPM song but
+  drifted to 114 BPM after a single low-onset-strength frame). The reference
+  algorithm trusts every Viterbi step including low-confidence ones, which
+  on real-time mic-captured audio lets a noisy frame corrupt the prior and
+  build a "wrong" lock that survives even when good observations resume.
+  The fix: only let high-confidence (≥ 0.35) deltas become the next frame's
+  prior; below threshold the previous prior is held unchanged. After a
+  sustained low-confidence streak (4+ updates) the held prior decays toward
+  uniform at 10%/step so genuine tempo changes still win within ~6 seconds.
+  `current_bpm_` itself is still updated every frame from the live Viterbi
+  output — only the persisted state is gated.
 
 ## [0.4.1] - 2026-04-25
 
