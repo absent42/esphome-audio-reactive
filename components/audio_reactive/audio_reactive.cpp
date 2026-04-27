@@ -578,6 +578,38 @@ void AudioReactiveComponent::process_debug_logging_(uint32_t now, const BandEner
     ESP_LOGI(TAG, "BTrack: bpm=%.1f confidence=%.3f | SuperFlux peak strength (2s): %.4f",
              pro_debug_metrics_.btrack_bpm, pro_debug_metrics_.btrack_confidence,
              pro_debug_metrics_.superflux_strength_max);
+    {
+        // Diagnostic dump of the BTrack Viterbi pipeline's intermediate state.
+        // Top-3 peaks of ACF / comb-FB / delta — used to localise which stage
+        // is choosing the published BPM. Reads BTrack arrays directly from
+        // the main task while the FFT task is also writing them; for top-N
+        // peak diagnostics that's tolerable (worst case a peak is reported
+        // at a slightly stale index, which doesn't change the conclusion).
+        constexpr int kN = 3;
+        int idx_acf[kN];   float val_acf[kN];
+        int idx_cfb[kN];   float val_cfb[kN];
+        int idx_dlt[kN];   float val_dlt[kN];
+        BTrack::top_peaks(btrack_.acf(),     BTrack::kHistoryLen,        kN, idx_acf, val_acf);
+        BTrack::top_peaks(btrack_.comb_fb(), BTrack::kCombFbSize,        kN, idx_cfb, val_cfb);
+        BTrack::top_peaks(btrack_.delta(),   BTrack::kTempoCandidates,   kN, idx_dlt, val_dlt);
+        // Convert each peak index to the BPM it represents:
+        //   ACF[k]      = lag k frames        → 5168/k BPM
+        //   comb_fb[k]  = T = k+1 frames      → 5168/(k+1) BPM
+        //   delta[k]    = candidate index k   → 80 + 2k BPM
+        const float L = BTrack::kTempoToLagFactor;
+        ESP_LOGI(TAG, "  ACF top-3:     [%d/%.0fbpm]=%.5f  [%d/%.0fbpm]=%.5f  [%d/%.0fbpm]=%.5f",
+                 idx_acf[0], idx_acf[0] > 0 ? L/idx_acf[0] : 0.0f, val_acf[0],
+                 idx_acf[1], idx_acf[1] > 0 ? L/idx_acf[1] : 0.0f, val_acf[1],
+                 idx_acf[2], idx_acf[2] > 0 ? L/idx_acf[2] : 0.0f, val_acf[2]);
+        ESP_LOGI(TAG, "  comb_fb top-3: [%d/%.0fbpm]=%.5f  [%d/%.0fbpm]=%.5f  [%d/%.0fbpm]=%.5f",
+                 idx_cfb[0], idx_cfb[0] >= 0 ? L/(idx_cfb[0]+1) : 0.0f, val_cfb[0],
+                 idx_cfb[1], idx_cfb[1] >= 0 ? L/(idx_cfb[1]+1) : 0.0f, val_cfb[1],
+                 idx_cfb[2], idx_cfb[2] >= 0 ? L/(idx_cfb[2]+1) : 0.0f, val_cfb[2]);
+        ESP_LOGI(TAG, "  delta top-3:   [i=%d/%.0fbpm]=%.5f  [i=%d/%.0fbpm]=%.5f  [i=%d/%.0fbpm]=%.5f",
+                 idx_dlt[0], idx_dlt[0] >= 0 ? 80.0f + 2.0f*idx_dlt[0] : 0.0f, val_dlt[0],
+                 idx_dlt[1], idx_dlt[1] >= 0 ? 80.0f + 2.0f*idx_dlt[1] : 0.0f, val_dlt[1],
+                 idx_dlt[2], idx_dlt[2] >= 0 ? 80.0f + 2.0f*idx_dlt[2] : 0.0f, val_dlt[2]);
+    }
     // Reset the 2-second-window aggregates for the next interval.
     for (uint8_t b = 0; b < MusicalBands::kNumBands; b++) {
         pro_debug_metrics_.band_min[b] = 0.0f;

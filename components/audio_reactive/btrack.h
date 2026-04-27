@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdint>
 #include <algorithm>
+#include <limits>
 
 // BTrack-class beat tracker — clean re-implementation against the adamstark/BTrack
 // reference (https://github.com/adamstark/BTrack). The previous port at this path
@@ -95,6 +96,25 @@ class BTrack {
     int time_to_next_beat() const { return time_to_next_beat_; }
     int time_to_next_prediction() const { return time_to_next_prediction_; }
     float beat_period_frames() const { return beat_period_frames_val_; }
+    float current_confidence() const { return current_confidence_; }
+
+    // Read-only access to the Viterbi pipeline's intermediate buffers, so
+    // the audio_reactive component can log top-N peak indices/values when
+    // diagnosing which stage chose a particular tempo.
+    //   acf()        : kHistoryLen entries, balanced ACF of onset DF
+    //   comb_fb()    : kCombFbSize entries, comb-filterbank output
+    //   delta()      : kTempoCandidates entries, current Viterbi delta
+    //   prev_delta() : kTempoCandidates entries, previous Viterbi delta
+    const float *acf() const { return acf_; }
+    const float *comb_fb() const { return comb_fb_; }
+    const float *delta() const { return delta_; }
+    const float *prev_delta() const { return prev_delta_; }
+
+    // Find the top `n_peaks` largest entries in `buf[0..len-1]`. Writes
+    // their indices into `out_indices[0..n_peaks-1]` (descending by value),
+    // their values into `out_values[]`. n_peaks must be ≤ len.
+    static void top_peaks(const float *buf, int len, int n_peaks,
+                          int *out_indices, float *out_values);
     // Override Viterbi-derived beat_period (used by step-5 tests to feed
     // the DP path a known beat period without going through tempo
     // induction). The next per-beat tempo update will overwrite it.
@@ -715,6 +735,32 @@ inline void BTrack::log_gaussian_weights(float beat_period, float tightness,
             out[i] = std::exp(-0.5f * a * a);
         }
         v += 1.0f;
+    }
+}
+
+inline void BTrack::top_peaks(const float *buf, int len, int n_peaks,
+                              int *out_indices, float *out_values) {
+    // Initialize outputs to "empty" sentinels.
+    for (int i = 0; i < n_peaks; i++) {
+        out_indices[i] = -1;
+        out_values[i] = -std::numeric_limits<float>::infinity();
+    }
+    // Single-pass: for each input value, insert into the sorted top-N if
+    // it beats the smallest current entry. n_peaks is small (typically 3),
+    // so the inner loop is cheap.
+    for (int i = 0; i < len; i++) {
+        const float v = buf[i];
+        if (v <= out_values[n_peaks - 1]) continue;
+        // Find insertion position (descending order).
+        int pos = n_peaks - 1;
+        while (pos > 0 && v > out_values[pos - 1]) pos--;
+        // Shift smaller values down.
+        for (int k = n_peaks - 1; k > pos; k--) {
+            out_values[k] = out_values[k - 1];
+            out_indices[k] = out_indices[k - 1];
+        }
+        out_values[pos] = v;
+        out_indices[pos] = i;
     }
 }
 
