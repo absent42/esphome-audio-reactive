@@ -1,13 +1,13 @@
 // Unit tests for TempoEstimator. Native build:
-//   g++ -std=c++17 -O2 -I components/audio_reactive \
-//       test/test_tempo_estimator/test_tempo_estimator.cpp \
+//   g++ -std=c++17 -O2 test/test_tempo_estimator/test_tempo_estimator.cpp \
 //       -o /tmp/test_tempo_estimator && /tmp/test_tempo_estimator
+// Also runs under "pio test -e native" (relative include, no -I needed).
 #include <cassert>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 
-#include "tempo_estimator.h"
+#include "../../components/audio_reactive/tempo_estimator.h"
 #include "../test_helpers_rhythm.h"
 
 using esphome::audio_reactive::TempoEstimator;
