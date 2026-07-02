@@ -274,6 +274,23 @@ void test_observe_zero_window_decays_confidence() {
     printf("PASS: test_observe_zero_window_decays_confidence\n");
 }
 
+void test_observe_recovers_from_nan_window() {
+    // One poisoned window (e.g. a NaN escaping the FFT path) must not
+    // permanently corrupt state_: without the !(x > eps) silence guard the
+    // NaN spreads through state_ and the argmax pins at index 0 (60 BPM)
+    // with confidence 1.0 forever.
+    TempoEstimator te;
+    feed_pulse_windows(te, 128.0f, 8);
+    float win[TempoEstimator::kWindowLen];
+    for (int i = 0; i < TempoEstimator::kWindowLen; i++) win[i] = 0.0f;
+    win[TempoEstimator::kWindowLen / 2] = std::nanf("");
+    te.observe(win, TempoEstimator::kWindowLen);
+    auto est = feed_pulse_windows(te, 128.0f, 8);
+    assert(std::isfinite(est.bpm));
+    assert(std::fabs(est.bpm - 128.0f) <= 2.0f);
+    printf("PASS: test_observe_recovers_from_nan_window (bpm=%.2f)\n", est.bpm);
+}
+
 void test_observe_sub_grid_resolution() {
     // 115 and 116 BPM must produce distinct estimates (old code: both -> 114).
     TempoEstimator te1, te2;
@@ -354,6 +371,7 @@ int main() {
     test_observe_locks_on_consistent_evidence();
     test_observe_escapes_stale_lock_within_bounded_updates();
     test_observe_zero_window_decays_confidence();
+    test_observe_recovers_from_nan_window();
     test_observe_sub_grid_resolution();
     test_club_patterns_no_114_150_attractors();
     test_speech_noise_stays_unconfident();

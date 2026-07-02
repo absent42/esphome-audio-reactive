@@ -1,11 +1,12 @@
 // test/test_btrack/test_btrack.cpp
 //
-// Unit tests for the BTrack rewrite (see docs analysis report — re-implementation
-// is happening step-by-step with TDD). Tests are added alongside each step's
-// implementation; end-to-end metronome / real-music tests live in their own
-// test directories (added at steps 7-8).
+// Unit tests for the BTrack beat tracker. Tempo induction is delegated to
+// TempoEstimator (see test/test_tempo_estimator for its per-helper coverage);
+// the tests here cover the cumulative-score DP, beat prediction, and the
+// full pipeline on metronome, club-pattern, and speech-noise fixtures.
 //
-// Build (native):  g++ -std=c++17 -O2 -I.. test_btrack.cpp -o test_btrack
+// Build (native):  g++ -std=c++17 -O2 -I components/audio_reactive \
+//                      test/test_btrack/test_btrack.cpp -o /tmp/test_btrack
 //                  (PlatformIO `pio test -e native -f test_btrack` does this in CI)
 
 #include <cassert>
@@ -14,384 +15,12 @@
 
 #define AUDIO_REACTIVE_NATIVE_TEST
 #include "../../components/audio_reactive/btrack.h"
+#include "../test_helpers_rhythm.h"
 
 using namespace esphome::audio_reactive;
 
 // ---------------------------------------------------------------------------
-// Step 1 — adaptive_threshold
-// ---------------------------------------------------------------------------
-// The reference (adamstark BTrack, calculateTempo() in src/BTrack.cpp) calls
-// adaptiveThreshold() on the onset DF before computing the autocorrelation
-// function. Without this step the always-positive SuperFlux baseline acts as
-// a DC bias that dominates the ACF and buries beat-period peaks.
-//
-// Reference signature (1-based-aware):  void adaptiveThreshold(double *x, int N)
-//   - subtracts a local moving-mean computed in [i - 8, i + 7] (clipped to
-//     [0, N-1] at edges), then clamps the result at zero.
-//   - the "mean" is BTrack's mean_array() — sums positive values only, divides
-//     by the full window length. Negative samples contribute zero to the sum.
-//
-// The DC-removal property is the most load-bearing behavioural guarantee
-// (a constant input must produce all-zero output, because the local mean
-// equals the input). The first test exercises that.
-
-void test_adaptive_threshold_constant_dc_becomes_zero() {
-    constexpr int N = 32;
-    float x[N], scratch[N];
-    for (int i = 0; i < N; i++) x[i] = 5.0f;
-    BTrack::adaptive_threshold(x, N, scratch);
-    for (int i = 0; i < N; i++) {
-        // Local mean of a constant signal is the constant. Subtract → 0.
-        // Clamp doesn't change a 0. So output is exactly 0 for all i.
-        if (x[i] != 0.0f) {
-            fprintf(stderr,
-                    "FAIL: test_adaptive_threshold_constant_dc_becomes_zero — "
-                    "x[%d] = %f, want 0\n", i, x[i]);
-            assert(false);
-        }
-    }
-    printf("PASS: test_adaptive_threshold_constant_dc_becomes_zero\n");
-}
-
-// Negative inputs must be clamped to zero. This double-tests two things:
-// (a) the post-subtraction clamp is present; (b) the positive-only mean
-// behaves as documented (negatives contribute zero to the sum, so a
-// negative-only input has mean 0, x[i] - 0 = x[i] < 0, clamp gives 0).
-void test_adaptive_threshold_negative_input_clamped_to_zero() {
-    constexpr int N = 32;
-    float x[N], scratch[N];
-    for (int i = 0; i < N; i++) x[i] = -1.0f;
-    BTrack::adaptive_threshold(x, N, scratch);
-    for (int i = 0; i < N; i++) {
-        if (x[i] != 0.0f) {
-            fprintf(stderr,
-                    "FAIL: test_adaptive_threshold_negative_input_clamped_to_zero "
-                    "— x[%d] = %f, want 0\n", i, x[i]);
-            assert(false);
-        }
-    }
-    printf("PASS: test_adaptive_threshold_negative_input_clamped_to_zero\n");
-}
-
-// A single spike on a zero baseline should be preserved as a peak. This is
-// the load-bearing property the reference uses adaptive_threshold for: peaks
-// in the onset DF stand out after the local mean is subtracted.
-void test_adaptive_threshold_preserves_spike_above_baseline() {
-    constexpr int N = 32;
-    float x[N], scratch[N];
-    for (int i = 0; i < N; i++) x[i] = 0.0f;
-    constexpr int kSpike = 20;
-    constexpr float kSpikeAmp = 10.0f;
-    x[kSpike] = kSpikeAmp;
-    BTrack::adaptive_threshold(x, N, scratch);
-
-    // Spike position should still be positive (peak preserved). Off-peak
-    // positions should be zero (clamped after subtracting positive mean).
-    if (!(x[kSpike] > 0.5f * kSpikeAmp)) {
-        fprintf(stderr,
-                "FAIL: spike at i=%d expected to remain > 5.0, got %f\n",
-                kSpike, x[kSpike]);
-        assert(false);
-    }
-    for (int i = 0; i < N; i++) {
-        if (i == kSpike) continue;
-        if (x[i] != 0.0f) {
-            fprintf(stderr,
-                    "FAIL: off-spike position x[%d] expected 0, got %f\n",
-                    i, x[i]);
-            assert(false);
-        }
-    }
-    printf("PASS: test_adaptive_threshold_preserves_spike_above_baseline "
-           "(spike=%.3f)\n", x[kSpike]);
-}
-
-// ---------------------------------------------------------------------------
-// Step 2 — balanced_acf
-// ---------------------------------------------------------------------------
-// The reference's tempo-induction pipeline runs balanced_acf on the (already-
-// adaptive-thresholded) onset DF. The "balanced" property is the load-bearing
-// one: by dividing the sum at lag k by (N - k) (the count of valid pairs at
-// that lag), peaks at periodic structure stand at the same height regardless
-// of which multiple of the period they're at.
-//
-// Test signal: pulse train of N=32 samples with pulses at indices 0, 8, 16,
-// 24 (period T=8, four pulses, all unit amplitude). Theoretical balanced ACF:
-//
-//   acf[0]  = 4   pairs / (32 -  0) = 4/32 = 0.125    // self-correlation
-//   acf[8]  = 3   pairs / (32 -  8) = 3/24 = 0.125    // pulse 0↔1, 1↔2, 2↔3
-//   acf[16] = 2   pairs / (32 - 16) = 2/16 = 0.125    // pulse 0↔2, 1↔3
-//   acf[24] = 1   pair  / (32 - 24) = 1/ 8 = 0.125    // pulse 0↔3
-//   acf[i]  = 0  for i not a multiple of 8
-//
-// All four peaks at the same height (0.125) is the balanced property — an
-// UN-balanced ACF (sum / N) would taper from 0.125 → 0.094 → 0.063 → 0.031
-// at increasing lag multiples, which would make harmonic-summing in the
-// comb filterbank biased toward the lowest harmonic.
-
-void test_balanced_acf_pulse_train_peaks_uniform() {
-    constexpr int N = 32;
-    constexpr int T = 8;
-    float x[N] = {0};
-    float acf[N] = {0};
-    for (int i = 0; i < N; i += T) x[i] = 1.0f;  // 4 pulses
-
-    BTrack::balanced_acf(x, N, acf);
-
-    constexpr float kExpected = 0.125f;
-    constexpr float kTol = 1e-5f;
-    for (int lag = 0; lag < N; lag += T) {
-        if (fabsf(acf[lag] - kExpected) > kTol) {
-            fprintf(stderr,
-                    "FAIL: balanced_acf at multiple-of-period lag — "
-                    "acf[%d] = %f, want %f\n", lag, acf[lag], kExpected);
-            assert(false);
-        }
-    }
-    for (int lag = 0; lag < N; lag++) {
-        if (lag % T == 0) continue;
-        if (fabsf(acf[lag]) > kTol) {
-            fprintf(stderr,
-                    "FAIL: balanced_acf at non-period lag — "
-                    "acf[%d] = %f, want 0\n", lag, acf[lag]);
-            assert(false);
-        }
-    }
-    printf("PASS: test_balanced_acf_pulse_train_peaks_uniform "
-           "(acf[0]=%f, acf[8]=%f, acf[16]=%f, acf[24]=%f)\n",
-           acf[0], acf[T], acf[2*T], acf[3*T]);
-}
-
-// ---------------------------------------------------------------------------
-// Step 3 — rayleigh_weights + comb_filterbank
-// ---------------------------------------------------------------------------
-// Rayleigh distribution w[n] = (n / r²) · exp(-n² / 2r²) has a single mode
-// at n = r and is zero at n=0. Sanity-check those two anchors.
-
-void test_rayleigh_weights_peak_at_r() {
-    constexpr int N = 128;
-    constexpr float r = 43.0f;
-    float w[N];
-    BTrack::rayleigh_weights(r, N, w);
-
-    // w[0] is exactly zero (n factor in the formula).
-    if (w[0] != 0.0f) {
-        fprintf(stderr,
-                "FAIL: rayleigh_weights w[0] = %f, want 0\n", w[0]);
-        assert(false);
-    }
-    // argmax should be at n = round(r) = 43.
-    int argmax = 0;
-    float maxv = w[0];
-    for (int i = 1; i < N; i++) {
-        if (w[i] > maxv) { maxv = w[i]; argmax = i; }
-    }
-    if (argmax != static_cast<int>(r)) {
-        fprintf(stderr,
-                "FAIL: rayleigh_weights argmax = %d, want %d (peak value %f)\n",
-                argmax, static_cast<int>(r), maxv);
-        assert(false);
-    }
-    printf("PASS: test_rayleigh_weights_peak_at_r "
-           "(argmax=%d, w[r]=%f)\n", argmax, maxv);
-}
-
-// Comb filterbank with a single ACF peak at lag k: argmax of comb_fb output
-// should be at i = k (the period candidate aligned with that lag, via the
-// a=1 path which reads acf[i+a-1+b] with a=1, b=0 → acf[i]).
-//
-// We pick k=43 (the period at 120 BPM, where the Rayleigh prior also peaks)
-// so the argmax-at-k property doesn't depend on the prior — but a follow-up
-// test below picks a non-prior-aligned k to prove the comb FB tracks the
-// ACF peak rather than simply locking on the prior.
-
-void test_comb_filterbank_argmax_follows_acf_peak_at_prior() {
-    constexpr int kAcfLen = 256;
-    constexpr int kNPer = 128;
-    constexpr int kPeak = 43;
-
-    float acf[kAcfLen] = {0};
-    acf[kPeak] = 1.0f;
-
-    float weights[kNPer];
-    BTrack::rayleigh_weights(43.0f, kNPer, weights);
-
-    float comb_fb[kNPer] = {0};
-    BTrack::comb_filterbank(acf, kAcfLen, weights, kNPer, comb_fb);
-
-    int argmax = 0;
-    float maxv = comb_fb[0];
-    for (int i = 1; i < kNPer; i++) {
-        if (comb_fb[i] > maxv) { maxv = comb_fb[i]; argmax = i; }
-    }
-    if (argmax != kPeak) {
-        fprintf(stderr,
-                "FAIL: comb_filterbank argmax = %d, want %d\n",
-                argmax, kPeak);
-        assert(false);
-    }
-    printf("PASS: test_comb_filterbank_argmax_follows_acf_peak_at_prior "
-           "(argmax=%d, comb_fb[argmax]=%f)\n", argmax, maxv);
-}
-
-// Critical: prove the comb FB does NOT lock onto the prior peak when the
-// ACF says otherwise. ACF peak at lag=60 (≈86 BPM, well away from the 120-BPM
-// Rayleigh prior) → comb FB argmax must be at 60, not at 43. This is the
-// property the previous port broke (its biased Viterbi initial prior pulled
-// every lock toward 120 BPM regardless of music tempo).
-
-void test_comb_filterbank_argmax_follows_acf_peak_off_prior() {
-    constexpr int kAcfLen = 256;
-    constexpr int kNPer = 128;
-    constexpr int kPeak = 60;  // ≈86 BPM at 86.13 fps frame rate
-
-    float acf[kAcfLen] = {0};
-    acf[kPeak] = 1.0f;
-
-    float weights[kNPer];
-    BTrack::rayleigh_weights(43.0f, kNPer, weights);
-
-    float comb_fb[kNPer] = {0};
-    BTrack::comb_filterbank(acf, kAcfLen, weights, kNPer, comb_fb);
-
-    int argmax = 0;
-    float maxv = comb_fb[0];
-    for (int i = 1; i < kNPer; i++) {
-        if (comb_fb[i] > maxv) { maxv = comb_fb[i]; argmax = i; }
-    }
-    if (argmax != kPeak) {
-        fprintf(stderr,
-                "FAIL: off-prior comb_filterbank argmax = %d, want %d "
-                "(comb_fb[43]=%f, comb_fb[%d]=%f)\n",
-                argmax, kPeak, comb_fb[43], kPeak, comb_fb[kPeak]);
-        assert(false);
-    }
-    printf("PASS: test_comb_filterbank_argmax_follows_acf_peak_off_prior "
-           "(argmax=%d, comb_fb[argmax]=%f, comb_fb[43]=%f)\n",
-           argmax, maxv, comb_fb[43]);
-}
-
-// ---------------------------------------------------------------------------
-// Step 4 — Viterbi tempo update
-// ---------------------------------------------------------------------------
-// The 41-candidate grid maps i → BPM = 80 + 2i. So argmax(delta) = i means
-// "current tempo estimate = 80 + 2i BPM". The reference's initial prevDelta
-// is uniform 1.0 — the property that broke in our previous port (which used
-// a tightly-peaked Gaussian centred on i=20 = 120 BPM and so couldn't lock
-// off-prior tempos).
-
-void test_build_tempo_observation_picks_correct_candidate_for_120bpm() {
-    constexpr int kNPer = 128;
-    constexpr int kNCand = BTrack::kTempoCandidates;
-    // 120 BPM → lag = round(5168/120) = 43. comb_fb index = 43-1 = 42 (the
-    // build_tempo_observation reads comb_fb[lag - 1]).
-    float comb_fb[kNPer] = {0};
-    comb_fb[42] = 1.0f;
-
-    float obs[kNCand] = {0};
-    BTrack::build_tempo_observation(comb_fb, kNPer, obs, kNCand);
-
-    // Expect the largest entry at i=20 (BPM=120). Other candidates may have
-    // small contributions if their lag2 (double-tempo) sample falls on the
-    // peak — but the i=20 entry should dominate since both lag1 and lag2
-    // sample non-peak indices for it (lag2 for i=20 = round(5168/240) = 22,
-    // comb_fb[21] = 0).
-    int argmax = 0;
-    for (int i = 1; i < kNCand; i++) if (obs[i] > obs[argmax]) argmax = i;
-    if (argmax != 20) {
-        fprintf(stderr,
-                "FAIL: build_tempo_observation argmax = %d, want 20 "
-                "(obs[20]=%f, obs[argmax]=%f)\n",
-                argmax, obs[20], obs[argmax]);
-        assert(false);
-    }
-    printf("PASS: test_build_tempo_observation_picks_correct_candidate_for_120bpm "
-           "(obs[20]=%f)\n", obs[20]);
-}
-
-void test_tempo_transition_matrix_diagonal_is_max() {
-    constexpr int kNCand = BTrack::kTempoCandidates;
-    float tm[kNCand * kNCand];
-    BTrack::build_tempo_transition_matrix(BTrack::kTempoSigma, kNCand, tm);
-
-    // Each row's argmax must be on the diagonal (transition Gaussian centred
-    // at i; prob of staying at i is highest).
-    for (int i = 0; i < kNCand; i++) {
-        int argmax = 0;
-        float maxv = tm[i * kNCand + 0];
-        for (int j = 1; j < kNCand; j++) {
-            if (tm[i * kNCand + j] > maxv) {
-                maxv = tm[i * kNCand + j];
-                argmax = j;
-            }
-        }
-        if (argmax != i) {
-            fprintf(stderr,
-                    "FAIL: tm row %d argmax = %d, want %d (max=%f)\n",
-                    i, argmax, i, maxv);
-            assert(false);
-        }
-        // Diagonal should be exactly 1.0 (exp(0)).
-        if (fabsf(tm[i * kNCand + i] - 1.0f) > 1e-5f) {
-            fprintf(stderr,
-                    "FAIL: tm[%d][%d] = %f, want 1.0\n",
-                    i, i, tm[i * kNCand + i]);
-            assert(false);
-        }
-    }
-    printf("PASS: test_tempo_transition_matrix_diagonal_is_max\n");
-}
-
-// CRITICAL: with a uniform initial prevDelta and a comb_fb peaked at the
-// 90 BPM lag (off the 120 BPM Rayleigh prior), the Viterbi step must lock
-// onto candidate i=5 (= (90-80)/2). This is the key property the previous
-// port broke: its biased initial delta pulled lock toward i=20 regardless
-// of observation.
-
-void test_viterbi_step_locks_off_prior_with_uniform_initial_delta() {
-    constexpr int kNPer = 128;
-    constexpr int kNCand = BTrack::kTempoCandidates;
-    constexpr int kTargetCand = 5;          // BPM = 80 + 2*5 = 90
-    // 90 BPM → lag = round(5168/90) = 57. comb_fb index = 57-1 = 56.
-    float comb_fb[kNPer] = {0};
-    comb_fb[56] = 1.0f;
-
-    float obs[kNCand] = {0};
-    BTrack::build_tempo_observation(comb_fb, kNPer, obs, kNCand);
-
-    float tm[kNCand * kNCand];
-    BTrack::build_tempo_transition_matrix(BTrack::kTempoSigma, kNCand, tm);
-
-    float prev_delta[kNCand];
-    for (int i = 0; i < kNCand; i++) prev_delta[i] = 1.0f;  // uniform
-
-    float delta[kNCand];
-    BTrack::viterbi_step(prev_delta, obs, tm, kNCand, delta);
-
-    int argmax = 0;
-    for (int i = 1; i < kNCand; i++) if (delta[i] > delta[argmax]) argmax = i;
-    if (argmax != kTargetCand) {
-        fprintf(stderr,
-                "FAIL: viterbi_step argmax = %d, want %d "
-                "(delta[5]=%f, delta[20]=%f)\n",
-                argmax, kTargetCand, delta[5], delta[20]);
-        assert(false);
-    }
-    // Output should be normalised (sum to 1 with floats — tolerate eps).
-    float sum = 0.0f;
-    for (int i = 0; i < kNCand; i++) sum += delta[i];
-    if (fabsf(sum - 1.0f) > 1e-4f) {
-        fprintf(stderr,
-                "FAIL: viterbi_step output not normalised (sum = %f)\n", sum);
-        assert(false);
-    }
-    printf("PASS: test_viterbi_step_locks_off_prior_with_uniform_initial_delta "
-           "(argmax=%d → BPM=%d, sum=%f)\n",
-           argmax, 80 + 2 * argmax, sum);
-}
-
-// ---------------------------------------------------------------------------
-// Step 5 — log-Gaussian weights / cumulative score DP / predict_beat
+// log-Gaussian weights / cumulative score DP / predict_beat
 // ---------------------------------------------------------------------------
 // log_gaussian_weights() builds the past-window weighting used in both the
 // cumulative-score DP step and predict_beat. With v starting at -2*beat_period
@@ -430,10 +59,8 @@ void test_log_gaussian_weights_peak_at_beat_period() {
 // pulse-train onset stream at the same period, the cumulative-score DP plus
 // predict_beat should produce beat events at intervals ≈ 43 frames.
 //
-// Tempo induction (Viterbi) is not exercised here — we override beat_period
-// via debug_set_beat_period_frames() so the DP path runs in isolation. Step 6
-// will rerun a similar test without the override and prove the Viterbi finds
-// the period itself.
+// Tempo induction is not exercised here — we override beat_period via
+// debug_set_beat_period_frames() so the DP path runs in isolation.
 
 void test_periodic_input_produces_beats_at_expected_cadence() {
     BTrack bt;
@@ -450,8 +77,8 @@ void test_periodic_input_produces_beats_at_expected_cadence() {
     for (int f = 0; f < kFrames; f++) {
         const float onset = (f == next_pulse) ? 10.0f : 0.0f;
         if (f == next_pulse) next_pulse += static_cast<int>(kBp);
-        // Re-assert beat period each frame so any stray Viterbi-side update
-        // (none in step 5, but defensive for step 6) doesn't perturb the test.
+        // Re-assert beat period each frame so the tempo-side update doesn't
+        // perturb the test.
         bt.debug_set_beat_period_frames(kBp);
         const auto r = bt.process(onset);
         if (r.beat_event && n_events < 64) events[n_events++] = f;
@@ -491,33 +118,36 @@ void test_periodic_input_produces_beats_at_expected_cadence() {
 }
 
 // ---------------------------------------------------------------------------
-// Step 6 — full pipeline integration (Viterbi tempo induction wired in).
+// Full pipeline integration (tempo induction wired in).
 // ---------------------------------------------------------------------------
 // With the tempo path active, BTrack must derive the beat period from the
 // input rather than from debug_set_beat_period_frames(). Tests at three BPMs
-// — 90, 120, 150 — to confirm the lock isn't biased toward the 120 BPM
-// Rayleigh prior.
+// — 90, 120, 150 — to confirm the lock isn't biased toward the 120 BPM prior.
 
 static float feed_metronome_get_final_bpm(float bpm, float seconds) {
     BTrack bt;
     bt.reset();
     const float period = BTrack::kFrameHz * 60.0f / bpm;
     const int total_frames = static_cast<int>(BTrack::kFrameHz * seconds);
-    int next_pulse = static_cast<int>(period);
+    // Accumulate the pulse position in float so the AVERAGE period is exact.
+    // (The old `next_pulse += (int)period` truncated: a "150 BPM" call
+    // actually produced a 152.0 BPM train — period 34.45 -> 34 — so a
+    // correct estimator would rightly fail a tight assertion.)
+    float next_pulse = period;
     BTrack::Result last;
     for (int f = 0; f < total_frames; f++) {
-        const float onset = (f == next_pulse) ? 10.0f : 0.0f;
-        if (f == next_pulse) next_pulse += static_cast<int>(period);
+        const float onset = (f == static_cast<int>(next_pulse)) ? 10.0f : 0.0f;
+        if (f == static_cast<int>(next_pulse)) next_pulse += period;
         last = bt.process(onset);
     }
     return last.bpm;
 }
 
 void test_locks_on_120_bpm_via_full_pipeline() {
-    const float bpm = feed_metronome_get_final_bpm(120.0f, 10.0f);
-    if (fabsf(bpm - 120.0f) > 4.0f) {
+    const float bpm = feed_metronome_get_final_bpm(120.0f, 20.0f);
+    if (fabsf(bpm - 120.0f) > 2.5f) {
         fprintf(stderr,
-                "FAIL: 120 BPM pulse train → BTrack reports %.1f BPM (want 120 ±4)\n",
+                "FAIL: 120 BPM pulse train → BTrack reports %.1f BPM (want 120 +-2.5)\n",
                 bpm);
         assert(false);
     }
@@ -525,13 +155,13 @@ void test_locks_on_120_bpm_via_full_pipeline() {
 }
 
 void test_locks_on_90_bpm_via_full_pipeline() {
-    // 90 BPM is well off the Rayleigh prior peak (43 frames ≈ 120 BPM). The
-    // previous port locked at 114-120 BPM regardless of input on real music;
-    // a working pipeline must lock at 90 ±4 here.
-    const float bpm = feed_metronome_get_final_bpm(90.0f, 15.0f);
-    if (fabsf(bpm - 90.0f) > 4.0f) {
+    // 90 BPM is well off the 120-BPM prior center. The old port locked at
+    // 114-120 BPM regardless of input on real music; a working pipeline must
+    // lock at 90 +-2.5 here.
+    const float bpm = feed_metronome_get_final_bpm(90.0f, 20.0f);
+    if (fabsf(bpm - 90.0f) > 2.5f) {
         fprintf(stderr,
-                "FAIL: 90 BPM pulse train → BTrack reports %.1f BPM (want 90 ±4)\n",
+                "FAIL: 90 BPM pulse train → BTrack reports %.1f BPM (want 90 +-2.5)\n",
                 bpm);
         assert(false);
     }
@@ -539,32 +169,127 @@ void test_locks_on_90_bpm_via_full_pipeline() {
 }
 
 void test_locks_on_150_bpm_via_full_pipeline() {
-    const float bpm = feed_metronome_get_final_bpm(150.0f, 10.0f);
-    if (fabsf(bpm - 150.0f) > 4.0f) {
+    const float bpm = feed_metronome_get_final_bpm(150.0f, 20.0f);
+    if (fabsf(bpm - 150.0f) > 2.5f) {
         fprintf(stderr,
-                "FAIL: 150 BPM pulse train → BTrack reports %.1f BPM (want 150 ±4)\n",
+                "FAIL: 150 BPM pulse train → BTrack reports %.1f BPM (want 150 +-2.5)\n",
                 bpm);
         assert(false);
     }
     printf("PASS: test_locks_on_150_bpm_via_full_pipeline (bpm=%.1f)\n", bpm);
 }
 
+// ---------------------------------------------------------------------------
+// Warmup + realistic-rhythm regression tests (club patterns, tempo change,
+// speech noise). These fixtures expose the 114/150 attractor bugs that pure
+// metronome trains cannot; see docs/plans/2026-07-02-tempo-induction-
+// rewrite.md, Background.
+// ---------------------------------------------------------------------------
+
+static float feed_env_get_final_bpm(const float *env, int n, float *conf_out) {
+    BTrack bt;
+    bt.reset();
+    BTrack::Result r{};
+    for (int f = 0; f < n; f++) r = bt.process(env[f]);
+    if (conf_out) *conf_out = r.confidence;
+    return r.bpm;
+}
+
+void test_warmup_suppresses_confidence() {
+    static float env[4096];
+    rhythm_fixtures::seed(42);
+    int n = rhythm_fixtures::build_club(128.0f, 10.0f, BTrack::kFrameHz, env, 4096);
+    BTrack bt;
+    bt.reset();
+    for (int f = 0; f < n; f++) {
+        auto r = bt.process(env[f]);
+        if (f < BTrack::kWarmupFrames) {
+            if (r.confidence != 0.0f) {
+                fprintf(stderr, "FAIL: confidence %.2f at warmup frame %d\n",
+                        r.confidence, f);
+                assert(false);
+            }
+        }
+    }
+    printf("PASS: test_warmup_suppresses_confidence\n");
+}
+
+void test_club_115_and_152_do_not_alias() {
+    static float env[8192];
+    struct Case { float truth; } cases[] = {{115}, {152}};
+    for (auto &c : cases) {
+        rhythm_fixtures::seed(42);
+        int n = rhythm_fixtures::build_club(c.truth, 30.0f, BTrack::kFrameHz,
+                                            env, 8192);
+        float conf = 0.0f;
+        float bpm = feed_env_get_final_bpm(env, n, &conf);
+        if (std::fabs(bpm - c.truth) > 2.5f) {
+            fprintf(stderr, "FAIL: club %.0f -> %.1f BPM (want +-2.5)\n",
+                    c.truth, bpm);
+            assert(false);
+        }
+    }
+    printf("PASS: test_club_115_and_152_do_not_alias\n");
+}
+
+void test_tempo_change_relocks_within_15s() {
+    static float env[16384];
+    rhythm_fixtures::seed(7);
+    int n1 = rhythm_fixtures::build_club(150.0f, 30.0f, BTrack::kFrameHz, env, 16384);
+    int n2 = rhythm_fixtures::build_club(122.0f, 30.0f, BTrack::kFrameHz,
+                                         env + n1, 16384 - n1);
+    BTrack bt;
+    bt.reset();
+    for (int f = 0; f < n1; f++) bt.process(env[f]);
+    int relock_frame = -1, held = 0;
+    for (int f = 0; f < n2; f++) {
+        auto r = bt.process(env[n1 + f]);
+        if (std::fabs(r.bpm - 122.0f) <= 2.5f) {
+            held++;
+            if (held >= (int)(3 * BTrack::kFrameHz) && relock_frame < 0)
+                relock_frame = f - held + 1;
+        } else {
+            held = 0;
+        }
+    }
+    if (relock_frame < 0 || relock_frame > (int)(15 * BTrack::kFrameHz)) {
+        fprintf(stderr, "FAIL: relock frame %d (want <= 15 s)\n", relock_frame);
+        assert(false);
+    }
+    printf("PASS: test_tempo_change_relocks_within_15s (%.1f s)\n",
+           relock_frame / BTrack::kFrameHz);
+}
+
+void test_speech_noise_publishes_zero() {
+    static float env[8192];
+    rhythm_fixtures::seed(555);
+    int n = rhythm_fixtures::build_speech(60.0f, BTrack::kFrameHz, env, 8192);
+    BTrack bt;
+    bt.reset();
+    int confident = 0, total = 0;
+    for (int f = 0; f < n; f++) {
+        auto r = bt.process(env[f]);
+        if (f < BTrack::kWarmupFrames) continue;
+        total++;
+        if (r.confidence >= BTrack::kSilenceConfidence) confident++;
+    }
+    if (confident * 10 > total) {
+        fprintf(stderr, "FAIL: speech confident on %d/%d frames\n", confident, total);
+        assert(false);
+    }
+    printf("PASS: test_speech_noise_publishes_zero (%d/%d)\n", confident, total);
+}
+
 int main() {
-    test_adaptive_threshold_constant_dc_becomes_zero();
-    test_adaptive_threshold_negative_input_clamped_to_zero();
-    test_adaptive_threshold_preserves_spike_above_baseline();
-    test_balanced_acf_pulse_train_peaks_uniform();
-    test_rayleigh_weights_peak_at_r();
-    test_comb_filterbank_argmax_follows_acf_peak_at_prior();
-    test_comb_filterbank_argmax_follows_acf_peak_off_prior();
-    test_build_tempo_observation_picks_correct_candidate_for_120bpm();
-    test_tempo_transition_matrix_diagonal_is_max();
-    test_viterbi_step_locks_off_prior_with_uniform_initial_delta();
     test_log_gaussian_weights_peak_at_beat_period();
     test_periodic_input_produces_beats_at_expected_cadence();
     test_locks_on_120_bpm_via_full_pipeline();
     test_locks_on_90_bpm_via_full_pipeline();
     test_locks_on_150_bpm_via_full_pipeline();
+    test_warmup_suppresses_confidence();
+    test_club_115_and_152_do_not_alias();
+    test_tempo_change_relocks_within_15s();
+    test_speech_noise_publishes_zero();
     printf("ALL BTRACK UNIT TESTS PASSED\n");
     return 0;
 }

@@ -106,7 +106,7 @@ class TempoEstimator {
     // Static helpers - public for unit tests.
     // ------------------------------------------------------------------
 
-    // Moved verbatim from btrack.h (their unit tests move here too).
+    // Moved verbatim from btrack.h (their unit tests moved here too).
     static void adaptive_threshold(float *x, int N, float *scratch);
     static void balanced_acf(const float *in, int N, float *out);
 
@@ -285,6 +285,7 @@ inline float TempoEstimator::peak_mass_fraction(const float *v, int n,
 }
 
 inline TempoEstimator::Estimate TempoEstimator::observe(const float *onset_df, int n) {
+    if (n <= 0) return {current_bpm_, 0.0f, false};  // no evidence
     if (n > kWindowLen) n = kWindowLen;
 
     // 1) Local-mean removal, exactly as the reference pipeline did.
@@ -302,7 +303,8 @@ inline TempoEstimator::Estimate TempoEstimator::observe(const float *onset_df, i
         score_sum += score_[c];
     }
 
-    if (score_sum <= 1e-12f) {
+    // !(x > eps) also catches NaN: one poisoned window must not corrupt state_
+    if (!(score_sum > 1e-12f)) {
         // Silence / no evidence: hold tempo, drop stability. state_ stays
         // untouched (evidence-free windows contribute nothing).
         stable_count_ = 0;
