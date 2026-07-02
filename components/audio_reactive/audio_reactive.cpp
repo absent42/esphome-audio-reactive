@@ -55,7 +55,12 @@ void AudioReactiveComponent::setup() {
                 }
                 size_t written = ring_buffer_.write(temp, batch);
                 if (written < batch) {
-                    ring_dropped_samples_ += static_cast<uint32_t>(batch - written);
+                    // Split load/add/store: compound assignment on a
+                    // volatile is deprecated since C++20 (ESP-IDF 5.x
+                    // builds with gnu++20).
+                    const uint32_t dropped = ring_dropped_samples_;
+                    ring_dropped_samples_ =
+                        dropped + static_cast<uint32_t>(batch - written);
                 }
                 offset += batch;
             }

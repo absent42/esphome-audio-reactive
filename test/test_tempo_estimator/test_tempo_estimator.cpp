@@ -375,7 +375,9 @@ void test_club_high_tempo_subharmonic_documented_limitation() {
                         c.truth, s, est.bpm);
                 assert(false);
             }
-            // When aliased, confidence must stay marginal (measured <= 0.34).
+            // When aliased on CLUB material, confidence stays marginal
+            // (measured <= 0.34). Note this bound does not hold for the
+            // clean-metronome edge case below, which reaches 0.60.
             if (!correct && !(est.confidence <= 0.40f)) {
                 fprintf(stderr, "FAIL: club %.0f seed %u aliased to %.2f with "
                         "conf %.2f (> 0.40)\n", c.truth, s, est.bpm, est.confidence);
@@ -386,7 +388,62 @@ void test_club_high_tempo_subharmonic_documented_limitation() {
                    correct ? "correct" : "documented sub-harmonic");
         }
     }
+    // The high-tempo limitation is broader than eighth-heavy club material:
+    // a CLEAN 180 BPM metronome (no eighth-note content) also locks the 1:2
+    // sub-harmonic - measured 90.0 at conf 0.60, which exceeds the 0.40
+    // club-alias confidence bound above, so this case gets its own 0.65
+    // bound.
+    {
+        TempoEstimator te;
+        auto est = feed_pulse_windows(te, 180.0f, 30);
+        const bool correct  = std::fabs(est.bpm - 180.0f) <= 2.5f;
+        const bool alias_12 = std::fabs(est.bpm - 90.0f) <= 2.5f;
+        if (!(correct || alias_12)) {
+            fprintf(stderr, "FAIL: metronome 180 -> %.2f (neither truth nor "
+                    "the documented 1:2 sub-harmonic)\n", est.bpm);
+            assert(false);
+        }
+        if (!correct && !(est.confidence <= 0.65f)) {
+            fprintf(stderr, "FAIL: metronome 180 aliased to %.2f with conf "
+                    "%.2f (> 0.65)\n", est.bpm, est.confidence);
+            assert(false);
+        }
+        printf("  metronome 180 -> %.2f conf=%.2f (%s)\n", est.bpm,
+               est.confidence, correct ? "correct" : "documented sub-harmonic");
+    }
     printf("PASS: test_club_high_tempo_subharmonic_documented_limitation\n");
+}
+
+// DOCUMENTED LIMITATION - octave (2:1) locks below ~85 BPM with eighth-note
+// content: the hats form a genuine pulse at twice the beat rate and the
+// 120-centred prior prefers the double, so slow club material reports double
+// tempo - and, unlike the high-tempo aliases, it publishes CONFIDENTLY.
+// Measured through the full BTrack pipeline on 30 s club fixtures (seeds
+// 42/555/90210): 60 -> 120.0 at conf 0.88-0.89, 65 -> 130.0 at conf
+// 0.80-0.84, 70 -> 140.0 at conf 0.81-0.87, 75 -> 150.0 at conf 0.68-0.73
+// (80 also doubles at conf 0.61-0.68; 85 is the first correct lock, at conf
+// 0.33-0.34, barely above the 0.3 gate). This suite's per-beat sliding
+// window reads a few points higher (e.g. 60 -> conf 0.89-0.91).
+void test_club_low_tempo_octave_documented_limitation() {
+    struct Case { float truth; } cases[] = {{60}, {65}, {70}, {75}};
+    const uint32_t seeds[] = {42, 555, 90210};
+    for (auto &c : cases) {
+        for (uint32_t s : seeds) {
+            auto est = run_club(c.truth, 30.0f, s);
+            const bool correct = std::fabs(est.bpm - c.truth) <= 2.5f;
+            const bool dbl     = std::fabs(est.bpm - 2.0f * c.truth) <= 2.5f;
+            if (!(correct || dbl)) {
+                fprintf(stderr,
+                        "FAIL: club %.0f seed %u -> %.2f (neither truth nor "
+                        "the documented 2:1 double)\n", c.truth, s, est.bpm);
+                assert(false);
+            }
+            printf("  club %.0f seed %u -> %.2f conf=%.2f (%s)\n",
+                   c.truth, s, est.bpm, est.confidence,
+                   correct ? "correct" : "documented 2:1 double");
+        }
+    }
+    printf("PASS: test_club_low_tempo_octave_documented_limitation\n");
 }
 
 void test_speech_noise_stays_unconfident() {
@@ -428,6 +485,7 @@ int main() {
     test_observe_sub_grid_resolution();
     test_club_patterns_no_114_150_attractors();
     test_club_high_tempo_subharmonic_documented_limitation();
+    test_club_low_tempo_octave_documented_limitation();
     test_speech_noise_stays_unconfident();
     printf("ALL TEMPO ESTIMATOR TESTS PASSED\n");
     return 0;

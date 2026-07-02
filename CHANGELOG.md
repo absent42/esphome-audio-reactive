@@ -11,17 +11,22 @@ All notable changes to the ESPHome Audio Reactive component will be documented i
   integer-lag comb filterbank and Viterbi prior. Fixes the BPM sensor
   sticking at 114/150, the systematic -2 to -6 BPM bias, and confident BPM
   readings on non-musical audio.
-- BPM detection range widened from 80-160 to 60-180.
+- BPM detection grid widened from 80-160 to 60-180; accuracy is reliably
+  within 2 BPM for roughly 85-160 BPM.
 - BPM confidence is now evidence-based: the peak-mass fraction of the
   smoothed tempo distribution, gated on argmax stability. Steady music
   typically reads around 0.5; the sensor reports 0 during the ~3 s warmup,
   on non-rhythmic audio (speech, TV, ambient noise), and during tempo
   transitions. A song change without a silence gap relocks within ~15 s.
-- Known limitation: above ~160 BPM with strong eighth-note content the
-  tracker can lock on the 2/3 (or 1/2) sub-harmonic at marginal confidence
-  (measured 168 -> 112 at confidence 0.33). A half-lag template term was
-  tried and reverted because it introduced half-tempo locks on eighth-free
-  material; see the KNOWN LIMITATION note in
+- Known limitation: outside ~85-160 BPM, octave and sub-harmonic ambiguity
+  dominates. Below ~85 BPM, material with busy eighth-note hats confidently
+  reports double tempo (measured 60 -> 120 at confidence 0.89); above
+  ~160 BPM the tracker can lock on the 2/3 or 1/2 sub-harmonic (measured
+  168 -> 112 at confidence 0.33; a clean 180 metronome -> 90 at 0.60).
+  Near 85 BPM confidence hovers around the 0.3 publish gate, so slow
+  material may flicker between the tempo and 0. A half-lag template term
+  was tried and reverted because it introduced half-tempo locks on
+  eighth-free material; see the KNOWN LIMITATION note in
   `components/audio_reactive/tempo_estimator.h`.
 
 ### Added

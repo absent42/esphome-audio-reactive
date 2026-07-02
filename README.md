@@ -188,7 +188,7 @@ Neither affects the USB web installer.
 | Mid Energy | sensor (0-1) | ~50ms | Smoothed, AGC-normalized mid band energy |
 | High Energy | sensor (0-1) | ~50ms | Smoothed, AGC-normalized high band energy |
 | Amplitude | sensor (0-1) | ~50ms | Overall smoothed amplitude with dynamics limiting |
-| BPM | sensor | ~1s | Estimated beats per minute (pro tier: 60-180 BPM range, ~2 BPM accuracy; reads 0 when unconfident) |
+| BPM | sensor | ~1s | Estimated beats per minute (pro tier: 60-180 BPM grid, reliably within 2 BPM for ~85-160; reads 0 when unconfident) |
 | Beat Confidence | sensor (0-1) | ~1s | Evidence-based confidence in the current BPM estimate (0 = no lock; steady music typically ~0.5) |
 | Beat Phase | sensor (0-1) | ~50ms | Position within the current beat cycle (0 = on beat, approaches 1 before next beat) |
 | Spectral Centroid | sensor (0-1) | ~50ms | Spectral "brightness" — weighted average frequency of the spectrum |
@@ -203,14 +203,17 @@ Neither affects the USB web installer.
 | Calibrate Music Level | button | On press | Calibrates signal scaling from music playback (5 seconds) |
 | Status LED | light | — | On-device RGB LED (ATOM Echo) |
 
-**BPM behavior (pro tier):** detection range is 60-180 BPM with typical
-accuracy within 2 BPM on steady material. Confidence is evidence-based, so
-the BPM sensor deliberately reports 0 whenever the tempo cannot be trusted:
-during the ~3 s warmup after startup or reset, on non-rhythmic audio
-(speech, TV, ambient noise), and briefly during tempo changes - a song
-switch without a silence gap relocks within ~15 s. Fast music above
-~160 BPM with dense eighth-note hats may read the 2/3 or 1/2 sub-harmonic
-(see CHANGELOG 0.5.0 known limitation).
+**BPM behavior (pro tier):** the detection grid spans 60-180 BPM; accuracy
+is reliably within 2 BPM for roughly 85-160 BPM. Outside that band octave
+ambiguity dominates: slower material (below ~85 BPM with busy hi-hats) may
+confidently report double tempo, and faster material (above ~160 BPM) may
+report a 2/3 or 1/2 sub-harmonic. Confidence is evidence-based, so the BPM
+sensor deliberately reports 0 whenever the tempo cannot be trusted: during
+the ~3 s warmup after startup or reset, on non-rhythmic audio (speech, TV,
+ambient noise), and briefly during tempo changes - a song switch without a
+silence gap relocks within ~15 s. Near 85 BPM confidence can hover around
+the 0.3 publish gate, so the sensor may flicker between the tempo and 0 on
+slow material (see CHANGELOG 0.5.0 known limitation).
 
 ## Configuration
 

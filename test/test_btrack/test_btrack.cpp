@@ -13,7 +13,6 @@
 #include <cmath>
 #include <cstdio>
 
-#define AUDIO_REACTIVE_NATIVE_TEST
 #include "../../components/audio_reactive/btrack.h"
 #include "../test_helpers_rhythm.h"
 
@@ -124,7 +123,8 @@ void test_periodic_input_produces_beats_at_expected_cadence() {
 // input rather than from debug_set_beat_period_frames(). Tests at three BPMs
 // — 90, 120, 150 — to confirm the lock isn't biased toward the 120 BPM prior.
 
-static float feed_metronome_get_final_bpm(float bpm, float seconds) {
+static float feed_metronome_get_final_bpm(float bpm, float seconds,
+                                          float *conf_out = nullptr) {
     BTrack bt;
     bt.reset();
     const float period = BTrack::kFrameHz * 60.0f / bpm;
@@ -134,12 +134,13 @@ static float feed_metronome_get_final_bpm(float bpm, float seconds) {
     // actually produced a 152.0 BPM train — period 34.45 -> 34 — so a
     // correct estimator would rightly fail a tight assertion.)
     float next_pulse = period;
-    BTrack::Result last;
+    BTrack::Result last{};
     for (int f = 0; f < total_frames; f++) {
         const float onset = (f == static_cast<int>(next_pulse)) ? 10.0f : 0.0f;
         if (f == static_cast<int>(next_pulse)) next_pulse += period;
         last = bt.process(onset);
     }
+    if (conf_out) *conf_out = last.confidence;
     return last.bpm;
 }
 
@@ -262,6 +263,8 @@ void test_club_high_tempo_subharmonic_documented_limitation() {
                         "a documented 2:3 / 1:2 sub-harmonic)\n", c.truth, s, bpm);
                 assert(false);
             }
+            // Club-alias confidence bound; the clean-metronome edge case
+            // below exceeds it (0.60) and gets its own bound.
             if (!correct && !(conf <= 0.40f)) {
                 fprintf(stderr, "FAIL: club %.0f seed %u aliased to %.1f with "
                         "conf %.2f (> 0.40)\n", c.truth, s, bpm, conf);
@@ -269,7 +272,59 @@ void test_club_high_tempo_subharmonic_documented_limitation() {
             }
         }
     }
+    // The high-tempo limitation is broader than eighth-heavy club material:
+    // a CLEAN 180 BPM metronome (no eighth-note content) also locks the 1:2
+    // sub-harmonic - measured 90.0 at conf 0.60.
+    {
+        float conf = 0.0f;
+        float bpm = feed_metronome_get_final_bpm(180.0f, 30.0f, &conf);
+        const bool correct  = std::fabs(bpm - 180.0f) <= 2.5f;
+        const bool alias_12 = std::fabs(bpm - 90.0f) <= 2.5f;
+        if (!(correct || alias_12)) {
+            fprintf(stderr, "FAIL: metronome 180 -> %.1f BPM (neither truth "
+                    "nor the documented 1:2 sub-harmonic)\n", bpm);
+            assert(false);
+        }
+        if (!correct && !(conf <= 0.65f)) {
+            fprintf(stderr, "FAIL: metronome 180 aliased to %.1f with conf "
+                    "%.2f (> 0.65)\n", bpm, conf);
+            assert(false);
+        }
+    }
     printf("PASS: test_club_high_tempo_subharmonic_documented_limitation\n");
+}
+
+// DOCUMENTED LIMITATION - octave (2:1) locks below ~85 BPM with eighth-note
+// content (full-pipeline mirror of the TempoEstimator test of the same
+// name): the hats form a genuine pulse at twice the beat rate and the
+// 120-centred prior prefers the double, so slow club material reports
+// double tempo - and, unlike the high-tempo aliases, it publishes
+// CONFIDENTLY. Measured (seeds 42/555/90210): 60 -> 120.0 at conf
+// 0.88-0.89, 65 -> 130.0 at conf 0.80-0.84, 70 -> 140.0 at conf 0.81-0.87,
+// 75 -> 150.0 at conf 0.68-0.73 (80 also doubles at conf 0.61-0.68; 85 is
+// the first correct lock, at conf 0.33-0.34, barely above the 0.3 gate).
+void test_club_low_tempo_octave_documented_limitation() {
+    static float env[8192];
+    struct Case { float truth; } cases[] = {{60}, {65}, {70}, {75}};
+    const uint32_t seeds[] = {42, 555, 90210};
+    for (auto &c : cases) {
+        for (uint32_t s : seeds) {
+            rhythm_fixtures::seed(s);
+            int n = rhythm_fixtures::build_club(c.truth, 30.0f, BTrack::kFrameHz,
+                                                env, 8192);
+            float conf = 0.0f;
+            float bpm = feed_env_get_final_bpm(env, n, &conf);
+            const bool correct = std::fabs(bpm - c.truth) <= 2.5f;
+            const bool dbl     = std::fabs(bpm - 2.0f * c.truth) <= 2.5f;
+            if (!(correct || dbl)) {
+                fprintf(stderr,
+                        "FAIL: club %.0f seed %u -> %.1f BPM (neither truth "
+                        "nor the documented 2:1 double)\n", c.truth, s, bpm);
+                assert(false);
+            }
+        }
+    }
+    printf("PASS: test_club_low_tempo_octave_documented_limitation\n");
 }
 
 void test_tempo_change_relocks_within_15s() {
@@ -329,6 +384,7 @@ int main() {
     test_warmup_suppresses_confidence();
     test_club_115_and_152_do_not_alias();
     test_club_high_tempo_subharmonic_documented_limitation();
+    test_club_low_tempo_octave_documented_limitation();
     test_tempo_change_relocks_within_15s();
     test_speech_noise_publishes_zero();
     printf("ALL BTRACK UNIT TESTS PASSED\n");

@@ -60,19 +60,33 @@ class TempoEstimator {
     static constexpr int   kNumHarmonics = 4;
     static constexpr float kHarmonicWeights[kNumHarmonics] = {1.0f, 0.6f, 0.4f, 0.3f};
 
-    // KNOWN LIMITATION - 3:2 sub-harmonic above ~160 BPM with strong
-    // eighth-note content: hats put ACF peaks on the T/2 grid, so the
-    // 2/3-tempo alias's harmonics (1.5T, 3T, 4.5T, 6T) all land on that
-    // grid and the 120-centred prior tips the tie toward the alias
-    // (measured on 30 s club fixtures, seeds 42/555/90210: 168 BPM ->
-    // 112.0-112.1 at conf 0.33 on all seeds; 176 is seed-dependent ->
-    // 88.0 at the 1:2 alias or 117.3 at the 3:2 alias, conf 0.00-0.34,
-    // sometimes unlocked). A half-lag template term
-    // (score += w * acf[0.5*lag], w in [0.3, 0.8]) was tried and reverted:
-    // the HALF-tempo candidate's half-lag is the true beat lag T - always
-    // the strongest ACF peak - so the term flipped 168 -> 84 and even the
-    // eighth-free 150 metronome -> 75 at every weight in range. See the
-    // Deferred section of docs/plans/2026-07-02-tempo-induction-rewrite.md.
+    // KNOWN LIMITATION - the practically-reliable range is ~85-160 BPM.
+    // Outside it, octave / sub-harmonic ambiguity dominates the harmonic
+    // template plus the 120-centred prior:
+    //
+    //   - BELOW ~85 with eighth-note content the DOUBLE tempo wins, and it
+    //     publishes CONFIDENTLY (the hats are a genuine pulse at 2x the
+    //     beat rate). Measured on 30 s club fixtures, seeds 42/555/90210:
+    //     60 -> 120.0 conf 0.88-0.89, 65 -> 130.0 conf 0.80-0.84,
+    //     70 -> 140.0 conf 0.81-0.87, 75 -> 150.0 conf 0.68-0.73,
+    //     80 -> 160.1 conf 0.61-0.68; 85 is the first correct lock, at
+    //     conf 0.33-0.34, barely above the 0.3 publish gate.
+    //
+    //   - ABOVE ~164 the 3:2 or 1:2 alias wins at conf 0.00-0.60: with
+    //     eighth-note hats the ACF has peaks on the T/2 grid, so the
+    //     2/3-tempo alias's harmonics (1.5T, 3T, 4.5T, 6T) all land on
+    //     that grid (measured: 168 -> 112.0-112.1 conf 0.33 on all seeds;
+    //     176 seed-dependent -> 88.0 at the 1:2 alias or 117.3 at the 3:2
+    //     alias, conf 0.00-0.34, sometimes unlocked). The high edge is NOT
+    //     limited to eighth-heavy material: a clean 180 BPM metronome
+    //     locks the 1:2 sub-harmonic at 90.0 conf 0.60.
+    //
+    // A half-lag template term (score += w * acf[0.5*lag], w in [0.3, 0.8])
+    // was tried and reverted: the HALF-tempo candidate's half-lag is the
+    // true beat lag T - always the strongest ACF peak - so the term flipped
+    // 168 -> 84 and even the eighth-free 150 metronome -> 75 at every
+    // weight in range. See the Deferred section of
+    // docs/plans/2026-07-02-tempo-induction-rewrite.md.
 
     // Log-normal tempo prior.
     static constexpr float kPriorCenterBpm   = 120.0f;
