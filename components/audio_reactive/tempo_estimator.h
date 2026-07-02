@@ -23,10 +23,16 @@
 //     bounded memory) instead of max-product Viterbi with a blended prior:
 //     old evidence decays geometrically no matter how strong it was, so any
 //     wrong lock is escapable within ~10 updates.
-//   - Confidence is evidence-based: peak-to-median ratio of the RAW score
-//     vector (before prior and smoothing), gated by argmax stability across
-//     consecutive updates. Non-rhythmic input produces an unstable argmax
-//     and near-flat scores -> confidence 0.
+//   - Confidence is the peak-neighborhood mass fraction of the SMOOTHED
+//     state vector, gated by argmax stability across consecutive updates.
+//     Each window's score is normalised to sum 1 before integration, so
+//     state_ is a moving average of observation mass: on music the mass
+//     piles up at the true tempo (fraction >> the 5/121 flat floor), while
+//     on non-rhythmic input the random per-window peaks average out and no
+//     +-2 BPM neighborhood accumulates mass -> confidence stays near 0.
+//     (An earlier peak-to-median metric on the raw score failed: the raw
+//     harmonic-score vector is sparse even for noise, so its median is
+//     near zero and any random peak looked confident.)
 //
 // All heavy buffers are class members: the caller (BTrack::process on the
 // FFT task) has a 6 KB stack.
@@ -59,16 +65,27 @@ class TempoEstimator {
     static constexpr float kPriorSigmaOctaves = 1.0f;
 
     // Smoothing / lock behaviour.
-    //   kSmoothLambda   : per-update state retention. Updates run once per
-    //                     beat (~2/s at 120 BPM); 0.85^10 = 0.20, so a wrong
-    //                     lock decays to noise within ~10 beats (~5 s).
-    //   kStableUpdates  : consecutive agreeing updates before "locked".
-    //   kStableTolBpm   : agreement tolerance between successive argmaxes.
-    //   kConfEmaAlpha   : EMA rate for the evidence confidence.
+    //   kSmoothLambda    : per-update state retention. Updates run once per
+    //                      beat (~2/s at 120 BPM); 0.85^10 = 0.20, so a wrong
+    //                      lock decays to noise within ~10 beats (~5 s).
+    //   kStableUpdates   : consecutive agreeing updates before "locked".
+    //   kStableTolBpm    : agreement tolerance between successive argmaxes.
+    //   kConfHalfWidthBpm: half-width (in 1-BPM grid steps) of the peak
+    //                      neighborhood whose state_ mass fraction is the
+    //                      confidence.
+    //   kConfScale       : mass fraction at which we call it fully
+    //                      confident (monotone rescale, capped at 1).
+    //                      Calibrated against the synthetic fixtures:
+    //                      club patterns hold 0.16-0.20 of state_ mass in
+    //                      the +-2 window once locked (harmonic-neighbor
+    //                      candidates split the rest), speech noise never
+    //                      exceeds 0.09. 0.35 maps those to >= 0.45 and
+    //                      <= 0.25 - both clear of the 0.3 publish gate.
     static constexpr float kSmoothLambda  = 0.85f;
     static constexpr int   kStableUpdates = 4;
     static constexpr float kStableTolBpm  = 3.0f;
-    static constexpr float kConfEmaAlpha  = 0.3f;
+    static constexpr int   kConfHalfWidthBpm = 2;
+    static constexpr float kConfScale = 0.35f;
 
     struct Estimate {
         float bpm;         // best tempo estimate (parabolically refined)
@@ -100,9 +117,11 @@ class TempoEstimator {
     // Harmonic-template score for one candidate BPM.
     static float harmonic_score_at(const float *acf, int len, float bpm);
 
-    // Peak-to-median confidence of a raw score vector: 0 for flat input,
-    // -> 1 for a single dominant peak. `scratch` needs n floats.
-    static float raw_confidence(const float *score, int n, float *scratch);
+    // Fraction of v's total mass inside [center-halfwidth, center+halfwidth]
+    // (bounds-clamped). 0 for empty/degenerate input (also catches a NaN
+    // total). Flat input -> window/n; single spike at center -> 1.
+    static float peak_mass_fraction(const float *v, int n, int center,
+                                    int halfwidth);
 
     // Log-normal prior weight at `bpm`.
     static float tempo_prior(float bpm);
@@ -114,7 +133,6 @@ class TempoEstimator {
  private:
     // Smoother state.
     float state_[kNumCandidates]{};
-    float conf_ema_{0.0f};
     float last_argmax_bpm_{0.0f};
     int   stable_count_{0};
     float current_bpm_{120.0f};
@@ -124,7 +142,6 @@ class TempoEstimator {
     float thresh_scratch_[kWindowLen]{};
     float acf_[kWindowLen]{};
     float score_[kNumCandidates]{};
-    float conf_scratch_[kNumCandidates]{};
 };
 
 // Definition for the in-class constexpr array (required at C++14/17 for ODR
@@ -133,7 +150,6 @@ inline constexpr float TempoEstimator::kHarmonicWeights[TempoEstimator::kNumHarm
 
 inline void TempoEstimator::reset() {
     for (int i = 0; i < kNumCandidates; i++) state_[i] = 0.0f;
-    conf_ema_ = 0.0f;
     last_argmax_bpm_ = 0.0f;
     stable_count_ = 0;
     current_bpm_ = 120.0f;
@@ -249,21 +265,23 @@ inline float TempoEstimator::tempo_prior(float bpm) {
     return std::exp(-0.5f * z * z);
 }
 
-inline float TempoEstimator::raw_confidence(const float *score, int n,
-                                            float *scratch) {
+inline float TempoEstimator::peak_mass_fraction(const float *v, int n,
+                                                int center, int halfwidth) {
     if (n <= 0) return 0.0f;
-    float peak = 0.0f;
-    for (int i = 0; i < n; i++) {
-        scratch[i] = score[i];
-        if (score[i] > peak) peak = score[i];
-    }
-    if (peak <= 0.0f) return 0.0f;
-    std::nth_element(scratch, scratch + n / 2, scratch + n);
-    const float median = scratch[n / 2];
-    float conf = (peak - median) / peak;
-    if (conf < 0.0f) conf = 0.0f;
-    if (conf > 1.0f) conf = 1.0f;
-    return conf;
+    float total = 0.0f;
+    for (int i = 0; i < n; i++) total += v[i];
+    // !(x > 0) also catches a NaN total: degenerate input -> 0 confidence.
+    if (!(total > 0.0f)) return 0.0f;
+    int lo = center - halfwidth;
+    int hi = center + halfwidth;
+    if (lo < 0) lo = 0;
+    if (hi > n - 1) hi = n - 1;
+    float window = 0.0f;
+    for (int i = lo; i <= hi; i++) window += v[i];
+    float frac = window / total;
+    if (frac < 0.0f) frac = 0.0f;
+    if (frac > 1.0f) frac = 1.0f;
+    return frac;
 }
 
 inline TempoEstimator::Estimate TempoEstimator::observe(const float *onset_df, int n) {
@@ -284,24 +302,21 @@ inline TempoEstimator::Estimate TempoEstimator::observe(const float *onset_df, i
         score_sum += score_[c];
     }
 
-    // 4) Evidence confidence from the RAW score (before prior/smoothing).
-    const float conf_raw = raw_confidence(score_, kNumCandidates, conf_scratch_);
-
     if (score_sum <= 1e-12f) {
-        // Silence / no evidence: decay confidence, hold tempo, drop stability.
-        conf_ema_ *= 0.7f;
+        // Silence / no evidence: hold tempo, drop stability. state_ stays
+        // untouched (evidence-free windows contribute nothing).
         stable_count_ = 0;
         return {current_bpm_, 0.0f, false};
     }
 
-    // 5) Leaky integration of the prior-weighted, normalised score.
+    // 4) Leaky integration of the prior-weighted, normalised score.
     for (int c = 0; c < kNumCandidates; c++) {
         const float bpm = kBpmMin + static_cast<float>(c);
         const float obs = (score_[c] / score_sum) * tempo_prior(bpm);
         state_[c] = kSmoothLambda * state_[c] + (1.0f - kSmoothLambda) * obs;
     }
 
-    // 6) Argmax + parabolic sub-grid refinement.
+    // 5) Argmax + parabolic sub-grid refinement.
     int best = 0;
     for (int c = 1; c < kNumCandidates; c++)
         if (state_[c] > state_[best]) best = c;
@@ -310,7 +325,15 @@ inline TempoEstimator::Estimate TempoEstimator::observe(const float *onset_df, i
         bpm_est += parabolic_offset(state_[best - 1], state_[best], state_[best + 1]);
     }
 
-    // 7) Stability gate + confidence EMA.
+    // 6) Confidence: peak-neighborhood mass fraction of the SMOOTHED state.
+    //    Measures cross-window reproducibility of evidence — on noise the
+    //    per-window peaks land at random candidates and average out, so no
+    //    +-kConfHalfWidthBpm neighborhood accumulates mass.
+    float conf = peak_mass_fraction(state_, kNumCandidates, best,
+                                    kConfHalfWidthBpm) / kConfScale;
+    if (conf > 1.0f) conf = 1.0f;
+
+    // 7) Stability gate.
     if (last_argmax_bpm_ > 0.0f &&
         std::fabs(bpm_est - last_argmax_bpm_) <= kStableTolBpm) {
         stable_count_++;
@@ -318,11 +341,10 @@ inline TempoEstimator::Estimate TempoEstimator::observe(const float *onset_df, i
         stable_count_ = 1;
     }
     last_argmax_bpm_ = bpm_est;
-    conf_ema_ = (1.0f - kConfEmaAlpha) * conf_ema_ + kConfEmaAlpha * conf_raw;
 
     const bool locked = stable_count_ >= kStableUpdates;
     if (locked) current_bpm_ = bpm_est;
-    const float conf_out = locked ? conf_ema_ : 0.0f;
+    const float conf_out = locked ? conf : 0.0f;
     return {current_bpm_, conf_out, locked};
 }
 

@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "tempo_estimator.h"
+#include "../test_helpers_rhythm.h"
 
 using esphome::audio_reactive::TempoEstimator;
 
@@ -202,19 +203,25 @@ void test_tempo_prior_gentle_and_centered() {
     printf("PASS: test_tempo_prior_gentle_and_centered\n");
 }
 
-void test_raw_confidence_flat_vs_peaked() {
-    float scratch[121];
-    float flat[121], peaked[121];
-    for (int i = 0; i < 121; i++) { flat[i] = 1.0f; peaked[i] = 0.01f; }
-    peaked[60] = 1.0f;
-    float c_flat = TempoEstimator::raw_confidence(flat, 121, scratch);
-    float c_peak = TempoEstimator::raw_confidence(peaked, 121, scratch);
+void test_peak_mass_fraction_flat_vs_spiked() {
+    // Flat vector: a +-2 window holds 5/121 of the mass -> < 0.05.
+    float flat[121];
+    for (int i = 0; i < 121; i++) flat[i] = 1.0f;
+    float c_flat = TempoEstimator::peak_mass_fraction(flat, 121, 60, 2);
+    assert(std::fabs(c_flat - 5.0f / 121.0f) < 1e-4f);
     assert(c_flat < 0.05f);
-    assert(c_peak > 0.9f);
+    // Single spike: all mass inside the window -> 1.0.
+    float spiked[121] = {};
+    spiked[60] = 1.0f;
+    assert(TempoEstimator::peak_mass_fraction(spiked, 121, 60, 2) == 1.0f);
+    // Spike at the edge: window clamps, still 1.0.
+    float edge[121] = {};
+    edge[0] = 1.0f;
+    assert(TempoEstimator::peak_mass_fraction(edge, 121, 0, 2) == 1.0f);
     // All-zero input must not divide by zero.
     float zeros[121] = {};
-    assert(TempoEstimator::raw_confidence(zeros, 121, scratch) == 0.0f);
-    printf("PASS: test_raw_confidence_flat_vs_peaked\n");
+    assert(TempoEstimator::peak_mass_fraction(zeros, 121, 60, 2) == 0.0f);
+    printf("PASS: test_peak_mass_fraction_flat_vs_spiked\n");
 }
 
 // Feed observe() n_updates windows containing a clean pulse train at `bpm`.
@@ -277,6 +284,61 @@ void test_observe_sub_grid_resolution() {
     printf("PASS: test_observe_sub_grid_resolution (%.2f, %.2f)\n", e1.bpm, e2.bpm);
 }
 
+// Slide a kWindowLen window through a long club envelope, calling observe()
+// every `hop_frames` (simulating per-beat cadence).
+static TempoEstimator::Estimate run_club(float bpm, float seconds) {
+    static float env[8192];
+    rhythm_fixtures::seed(42);
+    int n = rhythm_fixtures::build_club(bpm, seconds, TempoEstimator::kFrameHz,
+                                        env, 8192);
+    TempoEstimator te;
+    TempoEstimator::Estimate est{};
+    const int hop = (int)(TempoEstimator::kFrameHz * 60.0f / bpm);  // per beat
+    for (int start = 0; start + TempoEstimator::kWindowLen <= n; start += hop)
+        est = te.observe(env + start, TempoEstimator::kWindowLen);
+    return est;
+}
+
+void test_club_patterns_no_114_150_attractors() {
+    struct Case { float truth; } cases[] = {{115}, {116}, {122}, {128}, {152}, {153}};
+    for (auto &c : cases) {
+        auto est = run_club(c.truth, 30.0f);
+        if (std::fabs(est.bpm - c.truth) > 2.0f) {
+            fprintf(stderr, "FAIL: club %.0f BPM -> %.2f (want +-2)\n",
+                    c.truth, est.bpm);
+            assert(false);
+        }
+        // Music must be publishable: confidence comfortably above the 0.3 gate.
+        if (!(est.confidence >= 0.4f)) {
+            fprintf(stderr, "FAIL: club %.0f BPM conf=%.2f (want >= 0.4)\n",
+                    c.truth, est.confidence);
+            assert(false);
+        }
+        printf("  club %.0f -> %.2f conf=%.2f\n", c.truth, est.bpm, est.confidence);
+    }
+    printf("PASS: test_club_patterns_no_114_150_attractors\n");
+}
+
+void test_speech_noise_stays_unconfident() {
+    static float env[8192];
+    rhythm_fixtures::seed(555);
+    int n = rhythm_fixtures::build_speech(60.0f, TempoEstimator::kFrameHz, env, 8192);
+    TempoEstimator te;
+    int confident = 0, total = 0;
+    for (int start = 0; start + TempoEstimator::kWindowLen <= n; start += 43) {
+        auto est = te.observe(env + start, TempoEstimator::kWindowLen);
+        total++;
+        if (est.confidence >= 0.3f) confident++;
+    }
+    // At most 10% of updates may cross the publish gate on non-music.
+    if (confident * 10 > total) {
+        fprintf(stderr, "FAIL: speech noise confident on %d/%d updates\n",
+                confident, total);
+        assert(false);
+    }
+    printf("PASS: test_speech_noise_stays_unconfident (%d/%d)\n", confident, total);
+}
+
 int main() {
     test_grid_constants_consistent();
     test_adaptive_threshold_constant_dc_becomes_zero();
@@ -288,11 +350,13 @@ int main() {
     test_harmonic_score_peaks_at_true_tempo();
     test_no_4_3_alias_from_bar_harmonic();
     test_tempo_prior_gentle_and_centered();
-    test_raw_confidence_flat_vs_peaked();
+    test_peak_mass_fraction_flat_vs_spiked();
     test_observe_locks_on_consistent_evidence();
     test_observe_escapes_stale_lock_within_bounded_updates();
     test_observe_zero_window_decays_confidence();
     test_observe_sub_grid_resolution();
+    test_club_patterns_no_114_150_attractors();
+    test_speech_noise_stays_unconfident();
     printf("ALL TEMPO ESTIMATOR TESTS PASSED\n");
     return 0;
 }
