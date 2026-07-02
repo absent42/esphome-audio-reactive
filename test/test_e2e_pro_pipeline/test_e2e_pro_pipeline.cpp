@@ -298,11 +298,12 @@ struct Metrics {
     float band_mean[MusicalBands::kNumBands];
     float band_p95[MusicalBands::kNumBands];
     float raw_band_mean[MusicalBands::kNumBands];
-    // BPM variance over the last 10 s of frames. For a fixture with a fixed
-    // tempo, BPM stuck at any wrong value (e.g. 114 instead of 120) shows
-    // up as variance ≈ 0 around the wrong value. Variance > 0 means BTrack
-    // is at least adapting somewhere; combined with avg_bpm matching truth,
-    // it confirms tracking. variance ≈ 0 + bpm_err > tol = stuck-at-wrong.
+    // BPM spread over the last 10 s of frames. On a fixed-tempo fixture a
+    // correct tracker holds a tight cluster around truth (near-zero range
+    // AND near-zero variance); a hunting tracker sweeps a wide range. The
+    // range (max - min) is the assertion input; the variance is kept as a
+    // printed diagnostic. Stuck-at-wrong-value is caught by the separate
+    // avg-BPM-vs-truth assertion, not by demanding variance.
     float bpm_variance_last_10s;
     float bpm_max_last_10s;
     float bpm_min_last_10s;
@@ -467,11 +468,13 @@ static bool run_one(const std::string &stem) {
     // Per-band assertions on stress fixtures only. Three failure modes:
     //  (a) saturation: p95 ≥ 0.97 + mean ≥ 0.85 — AGC stuck near clip.
     //  (b) under-amp:  p95 < 0.05 — band silent despite real signal.
-    //  (c) BPM stuck:  variance ≈ 0 over 10s on a fixed-tempo fixture.
+    //  (c) BPM hunting: on a fixed-tempo fixture the last-10s BPM range must
+    //      stay inside one grid neighbourhood. (The old variance-floor check
+    //      asserted variance >= 0.5, which penalised CORRECT stable tracking.)
     const float band_p95_max = 0.97f;
     const float band_mean_max = 0.85f;
     const float band_p95_min = 0.05f;
-    const float bpm_var_min = 0.5f;
+    const float bpm_range_max = 6.0f;
 
     bool sat_ok = true;
     bool amp_ok = true;
@@ -493,7 +496,8 @@ static bool run_one(const std::string &stem) {
         }
         amp_ok = any_active;
     }
-    bool var_ok = !is_stress || (m.bpm_variance_last_10s >= bpm_var_min);
+    bool var_ok = !is_stress ||
+                  ((m.bpm_max_last_10s - m.bpm_min_last_10s) <= bpm_range_max);
 
     std::printf(
         "  %-24s frames=%zu  bpm=%.2f (truth=%.0f, err=%.2f, %s)  "
@@ -536,10 +540,13 @@ static bool run_one(const std::string &stem) {
             (double) m.raw_band_mean[4], (double) m.raw_band_mean[5],
             (double) m.raw_band_mean[6]);
         std::printf(
-            "    bpm last 10s: range=[%.1f, %.1f]  variance=%.2f  [%s]\n",
+            "    bpm last 10s: range=[%.1f, %.1f] (spread=%.1f, max %.1f)  "
+            "variance=%.2f (diagnostic)  [%s]\n",
             (double) m.bpm_min_last_10s, (double) m.bpm_max_last_10s,
+            (double) (m.bpm_max_last_10s - m.bpm_min_last_10s),
+            (double) bpm_range_max,
             (double) m.bpm_variance_last_10s,
-            var_ok ? "OK" : "FAIL (BPM stuck)");
+            var_ok ? "OK" : "FAIL (BPM hunting)");
     }
 
     return bpm_ok && f_ok && sat_ok && amp_ok && var_ok;
@@ -554,35 +561,18 @@ int main() {
     }
     std::printf("E2E pro pipeline: %zu fixture(s) in %s\n", wavs.size(), dir.c_str());
 
-    // Stress fixtures (music_stress_*) are DIAGNOSTIC-only right now: they
-    // intentionally surface the AGC under-amp / saturation and BPM-stuck
-    // bugs documented in docs/plans/audio-pro-dsp-fixes-audit.md. We don't
-    // want CI to break on those known-bad assertions until the fixes land —
-    // but we DO want their diagnostics printed so any new regression is
-    // visible. Set E2E_STRESS_STRICT=1 to make stress assertions fatal.
-    const char *strict_env = std::getenv("E2E_STRESS_STRICT");
-    bool strict_stress = (strict_env != nullptr && strict_env[0] == '1');
-
+    // All fixture assertions (including the stress fixtures' band and BPM
+    // checks) are fatal. The stress assertions were diagnostic-only while
+    // the AGC / BPM-stuck bugs from docs/plans/audio-pro-dsp-fixes-audit.md
+    // were open; those fixes have landed, so any failure here is a real
+    // regression.
     int fails = 0;
-    int stress_fails = 0;
     for (const auto &wav : wavs) {
         std::string stem = wav.substr(0, wav.size() - 4);
-        bool is_stress = stem.find("music_stress") != std::string::npos
-                         || stem.find("music_") != std::string::npos;
         bool ok = run_one(stem);
         if (!ok) {
-            if (is_stress && !strict_stress) {
-                stress_fails++;  // diagnostic only
-            } else {
-                fails++;
-            }
+            fails++;
         }
-    }
-    if (stress_fails > 0) {
-        std::printf(
-            "%d stress fixture(s) failed diagnostic assertions (expected — see "
-            "docs/plans/audio-pro-dsp-fixes-audit.md). Set E2E_STRESS_STRICT=1 "
-            "to escalate.\n", stress_fails);
     }
     if (fails == 0) {
         std::printf("All %zu fixture(s) passed required assertions.\n", wavs.size());
