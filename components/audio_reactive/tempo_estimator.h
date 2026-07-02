@@ -139,5 +139,108 @@ inline void TempoEstimator::reset() {
     current_bpm_ = 120.0f;
 }
 
+inline void TempoEstimator::adaptive_threshold(float *x, int N, float *scratch) {
+    if (N <= 0) return;
+    constexpr int p_pre = 8;
+    constexpr int p_post = 7;
+
+    // Helper: BTrack's mean_array() — sums positive values in x[lo..hi]
+    // (0-based, both inclusive), divides by `length` (NOT necessarily
+    // hi-lo+1; matches the reference's "stated length" semantics so we
+    // can faithfully replicate edge-case bias).
+    auto positive_mean = [](const float *arr, int lo, int hi, int length) {
+        if (length <= 0) return 0.0f;
+        float sum = 0.0f;
+        for (int j = lo; j <= hi; j++) {
+            if (arr[j] > 0.0f) sum += arr[j];
+        }
+        return sum / static_cast<float>(length);
+    };
+
+    // The reference splits the buffer into three regions and uses 1-based
+    // indexing internally. We reproduce the same window math in 0-based,
+    // clamping to [0, N-1] to avoid the off-by-one OOB read in the
+    // reference's middle loop. Comments quote the reference's 1-based form.
+    const int t = std::min(N, p_post);
+
+    // Edge 1 — i in [0, t]:  mean_array(x, 1, k)  with k = min(i+p_pre, N).
+    // 0-based window: x[0 .. k-1], length = k.
+    for (int i = 0; i <= t && i < N; i++) {
+        const int k = std::min(i + p_pre, N);
+        scratch[i] = positive_mean(x, 0, k - 1, k);
+    }
+
+    // Middle — i in [t+1, N-p_post):
+    //   mean_array(x, i - p_pre, i + p_post)  → 0-based window [i-p_pre-1, i+p_post-1].
+    //   The reference reads x[-1] at i=t+1=8 (undefined behaviour) and
+    //   divides by a fixed length 16 even when only 15 samples are valid.
+    //   That bias breaks DC removal for constant inputs at i=8 (residual
+    //   ≈ 1/16 of the input). We clamp lo at 0 AND use the clamped window
+    //   length as the divisor — a documented deviation from the reference's
+    //   buggy edge behaviour.
+    for (int i = t + 1; i < N - p_post; i++) {
+        int lo = i - p_pre - 1;
+        int hi = i + p_post - 1;
+        if (lo < 0) lo = 0;
+        if (hi >= N) hi = N - 1;
+        const int length = hi - lo + 1;
+        scratch[i] = positive_mean(x, lo, hi, length);
+    }
+
+    // Edge 2 — i in [N-p_post, N):  mean_array(x, k, N) with k = max(i-p_post, 1).
+    // 0-based window: x[k-1 .. N-1], length = N-k+1.
+    for (int i = std::max(0, N - p_post); i < N; i++) {
+        const int k = std::max(i - p_post, 1);
+        const int length = N - k + 1;
+        scratch[i] = positive_mean(x, k - 1, N - 1, length);
+    }
+
+    for (int i = 0; i < N; i++) {
+        x[i] -= scratch[i];
+        if (x[i] < 0.0f) x[i] = 0.0f;
+    }
+}
+
+inline void TempoEstimator::balanced_acf(const float *in, int N, float *out) {
+    if (N <= 0) return;
+    for (int lag = 0; lag < N; lag++) {
+        const int valid_pairs = N - lag;  // ≥ 1 for lag < N
+        float sum = 0.0f;
+        for (int n = 0; n < valid_pairs; n++) {
+            sum += in[n] * in[n + lag];
+        }
+        out[lag] = sum / static_cast<float>(valid_pairs);
+    }
+}
+
+inline float TempoEstimator::acf_interp(const float *acf, int len, float lag) {
+    if (lag < 0.0f || lag > static_cast<float>(len - 1)) return 0.0f;
+    const int i = static_cast<int>(lag);
+    const float frac = lag - static_cast<float>(i);
+    if (i >= len - 1) return acf[len - 1];
+    return acf[i] * (1.0f - frac) + acf[i + 1] * frac;
+}
+
+inline float TempoEstimator::parabolic_offset(float ym1, float y0, float yp1) {
+    const float denom = ym1 - 2.0f * y0 + yp1;
+    if (std::fabs(denom) < 1e-12f) return 0.0f;
+    float off = 0.5f * (ym1 - yp1) / denom;
+    if (off > 0.5f) off = 0.5f;
+    if (off < -0.5f) off = -0.5f;
+    return off;
+}
+
+inline float TempoEstimator::harmonic_score_at(const float *acf, int len, float bpm) {
+    if (bpm < 1.0f) return 0.0f;
+    const float lag = kFrameHz * 60.0f / bpm;
+    float score = 0.0f;
+    for (int h = 1; h <= kNumHarmonics; h++) {
+        const float hl = lag * static_cast<float>(h);
+        if (hl > static_cast<float>(len - 2)) break;  // beyond window: no credit
+        score += kHarmonicWeights[h - 1] * acf_interp(acf, len, hl);
+    }
+    return score;
+}
+
 }  // namespace audio_reactive
 }  // namespace esphome
