@@ -64,8 +64,10 @@ class TempoEstimator {
     // eighth-note content: hats put ACF peaks on the T/2 grid, so the
     // 2/3-tempo alias's harmonics (1.5T, 3T, 4.5T, 6T) all land on that
     // grid and the 120-centred prior tips the tie toward the alias
-    // (measured on 30 s club fixtures: 168 BPM -> 112.0 at conf 0.33,
-    // 176 -> 117.35 at conf 0.34). A half-lag template term
+    // (measured on 30 s club fixtures, seeds 42/555/90210: 168 BPM ->
+    // 112.0-112.1 at conf 0.33 on all seeds; 176 is seed-dependent ->
+    // 88.0 at the 1:2 alias or 117.3 at the 3:2 alias, conf 0.00-0.34,
+    // sometimes unlocked). A half-lag template term
     // (score += w * acf[0.5*lag], w in [0.3, 0.8]) was tried and reverted:
     // the HALF-tempo candidate's half-lag is the true beat lag T - always
     // the strongest ACF peak - so the term flipped 168 -> 84 and even the
