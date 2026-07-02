@@ -53,7 +53,10 @@ void AudioReactiveComponent::setup() {
                 for (size_t i = 0; i < batch; i++) {
                     temp[i] = static_cast<float>(samples[offset + i]) / 32768.0f;
                 }
-                ring_buffer_.write(temp, batch);
+                size_t written = ring_buffer_.write(temp, batch);
+                if (written < batch) {
+                    ring_dropped_samples_ += static_cast<uint32_t>(batch - written);
+                }
                 offset += batch;
             }
             // Wake FFT task when enough samples are available
@@ -543,9 +546,14 @@ void AudioReactiveComponent::process_debug_logging_(uint32_t now, const BandEner
              cal_store_.raw_scale, cal_store_.squelch_threshold);
     ESP_LOGI(TAG, "Published: bass=%.3f mid=%.3f high=%.3f amp=%.3f",
              smooth_bass_, smooth_mid_, smooth_high_, smooth_amp_);
-    ESP_LOGI(TAG, "Ring buffer: %u/%u samples",
+    ESP_LOGI(TAG, "Ring buffer: %u/%u samples, dropped=%u",
              static_cast<unsigned>(ring_buffer_.available()),
-             static_cast<unsigned>(ring_buffer_.capacity()));
+             static_cast<unsigned>(ring_buffer_.capacity()),
+             static_cast<unsigned>(ring_dropped_samples_));
+    // Reset so each dump reports drops per interval. (When debug logging is
+    // disabled the counter accumulates silently until the next dump - fine
+    // for a diagnostic.)
+    ring_dropped_samples_ = 0;
 
     raw_amp_min = 1e10f; raw_amp_max = 0.0f;
     raw_bass_min = 1e10f; raw_bass_max = 0.0f;

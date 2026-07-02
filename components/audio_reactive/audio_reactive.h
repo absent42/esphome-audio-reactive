@@ -298,6 +298,10 @@ class AudioReactiveComponent : public Component {
 
     // Ring buffer: tier-gated size (2x FFT window)
     RingBuffer<float, RING_BUFFER_SIZE> ring_buffer_;
+    // Samples dropped because the mic callback found the ring buffer full
+    // (FFT task starved). Nonzero values on hardware mean the onset stream
+    // has periodic discontinuities that can masquerade as beats.
+    uint32_t ring_dropped_samples_{0};
     FFTProcessor<FFT_SIZE> *fft_{nullptr};
 
     // Heap-allocated working buffers for FFT task (avoids stack overflow)

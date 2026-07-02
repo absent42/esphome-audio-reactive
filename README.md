@@ -93,8 +93,8 @@ needed unless you want to override the default.
 |-------|-----|-------|------|-----|-------------|--------------|----------------|-------|
 | M5 ATOM Echo (original) | ESP32-PICO-D4 | none | Basic | 512-pt | 22.05 kHz | Autocorrelation | Complex-domain | 3 (bass / mid / high) |
 | M5StickC Plus2 | ESP32-PICO-V3-02 | none | Basic | 512-pt | 22.05 kHz | Autocorrelation | Complex-domain | 3 (bass / mid / high) |
-| M5 ATOM Echo S3R | ESP32-S3 | 8 MB octal | Pro | 2048-pt | 44.1 kHz | BTrack (comb + Viterbi + DP) | SuperFlux | 7 musical (low_bass, bass, low_mid, mid, upper_mid, high, air) |
-| Waveshare ESP32-S3 Audio | ESP32-S3 | 8 MB octal | Pro | 2048-pt | 44.1 kHz | BTrack (comb + Viterbi + DP) | SuperFlux | 7 musical (low_bass, bass, low_mid, mid, upper_mid, high, air) |
+| M5 ATOM Echo S3R | ESP32-S3 | 8 MB octal | Pro | 2048-pt | 44.1 kHz | BTrack (harmonic-template tempo + DP) | SuperFlux | 7 musical (low_bass, bass, low_mid, mid, upper_mid, high, air) |
+| Waveshare ESP32-S3 Audio | ESP32-S3 | 8 MB octal | Pro | 2048-pt | 44.1 kHz | BTrack (harmonic-template tempo + DP) | SuperFlux | 7 musical (low_bass, bass, low_mid, mid, upper_mid, high, air) |
 
 Tier auto-detection requires both ESP32-S3 and a top-level `psram:` block in
 your YAML. Override with `dsp_tier: basic | pro | auto` (default `auto`).
@@ -188,8 +188,8 @@ Neither affects the USB web installer.
 | Mid Energy | sensor (0-1) | ~50ms | Smoothed, AGC-normalized mid band energy |
 | High Energy | sensor (0-1) | ~50ms | Smoothed, AGC-normalized high band energy |
 | Amplitude | sensor (0-1) | ~50ms | Overall smoothed amplitude with dynamics limiting |
-| BPM | sensor | ~1s | Estimated beats per minute from autocorrelation beat tracker |
-| Beat Confidence | sensor (0-1) | ~1s | Confidence in the current BPM estimate (0 = unknown, 1 = locked) |
+| BPM | sensor | ~1s | Estimated beats per minute (pro tier: 60-180 BPM range, ~2 BPM accuracy; reads 0 when unconfident) |
+| Beat Confidence | sensor (0-1) | ~1s | Evidence-based confidence in the current BPM estimate (0 = no lock; steady music typically ~0.5) |
 | Beat Phase | sensor (0-1) | ~50ms | Position within the current beat cycle (0 = on beat, approaches 1 before next beat) |
 | Spectral Centroid | sensor (0-1) | ~50ms | Spectral "brightness" — weighted average frequency of the spectrum |
 | Spectral Rolloff | sensor (0-1) | ~50ms | Frequency below which 85% of spectral energy is concentrated |
@@ -202,6 +202,15 @@ Neither affects the USB web installer.
 | Calibrate Quiet Room | button | On press | Calibrates noise floor from quiet room (3 seconds) |
 | Calibrate Music Level | button | On press | Calibrates signal scaling from music playback (5 seconds) |
 | Status LED | light | — | On-device RGB LED (ATOM Echo) |
+
+**BPM behavior (pro tier):** detection range is 60-180 BPM with typical
+accuracy within 2 BPM on steady material. Confidence is evidence-based, so
+the BPM sensor deliberately reports 0 whenever the tempo cannot be trusted:
+during the ~3 s warmup after startup or reset, on non-rhythmic audio
+(speech, TV, ambient noise), and briefly during tempo changes - a song
+switch without a silence gap relocks within ~15 s. Fast music above
+~160 BPM with dense eighth-note hats may read the 2/3 or 1/2 sub-harmonic
+(see CHANGELOG 0.5.0 known limitation).
 
 ## Configuration
 

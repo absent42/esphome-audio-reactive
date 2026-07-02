@@ -2,6 +2,34 @@
 
 All notable changes to the ESPHome Audio Reactive component will be documented in this file.
 
+## [0.5.0] - 2026-07-02
+
+### Changed
+
+- Rewrote BTrack tempo induction: fractional-lag harmonic-template scoring
+  over a continuous 60-180 BPM grid (new `TempoEstimator` class) replaces the
+  integer-lag comb filterbank and Viterbi prior. Fixes the BPM sensor
+  sticking at 114/150, the systematic -2 to -6 BPM bias, and confident BPM
+  readings on non-musical audio.
+- BPM detection range widened from 80-160 to 60-180.
+- BPM confidence is now evidence-based: the peak-mass fraction of the
+  smoothed tempo distribution, gated on argmax stability. Steady music
+  typically reads around 0.5; the sensor reports 0 during the ~3 s warmup,
+  on non-rhythmic audio (speech, TV, ambient noise), and during tempo
+  transitions. A song change without a silence gap relocks within ~15 s.
+- Known limitation: above ~160 BPM with strong eighth-note content the
+  tracker can lock on the 2/3 (or 1/2) sub-harmonic at marginal confidence
+  (measured 168 -> 112 at confidence 0.33). A half-lag template term was
+  tried and reverted because it introduced half-tempo locks on eighth-free
+  material; see the KNOWN LIMITATION note in
+  `components/audio_reactive/tempo_estimator.h`.
+
+### Added
+
+- Ring-buffer overflow counter in the audio debug dump (`dropped=` field in
+  the ring-buffer log line) for diagnosing on-device sample loss; periodic
+  drops inject onset discontinuities that can masquerade as beats.
+
 ## [0.4.2] - 2026-04-27
 
 ### Fixed (pro tier)
