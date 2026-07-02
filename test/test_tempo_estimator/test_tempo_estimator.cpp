@@ -190,6 +190,93 @@ void test_no_4_3_alias_from_bar_harmonic() {
            s_true, s_alias);
 }
 
+void test_tempo_prior_gentle_and_centered() {
+    // Peak at 120, symmetric in log-space, gentle at the edges.
+    assert(std::fabs(TempoEstimator::tempo_prior(120.0f) - 1.0f) < 1e-4f);
+    float p60 = TempoEstimator::tempo_prior(60.0f);
+    float p240_equiv = TempoEstimator::tempo_prior(240.0f);
+    assert(std::fabs(p60 - p240_equiv) < 1e-4f);  // one octave either side
+    assert(p60 > 0.55f);                          // gentle: no hard attractor
+    assert(TempoEstimator::tempo_prior(150.0f) >
+           TempoEstimator::tempo_prior(180.0f));
+    printf("PASS: test_tempo_prior_gentle_and_centered\n");
+}
+
+void test_raw_confidence_flat_vs_peaked() {
+    float scratch[121];
+    float flat[121], peaked[121];
+    for (int i = 0; i < 121; i++) { flat[i] = 1.0f; peaked[i] = 0.01f; }
+    peaked[60] = 1.0f;
+    float c_flat = TempoEstimator::raw_confidence(flat, 121, scratch);
+    float c_peak = TempoEstimator::raw_confidence(peaked, 121, scratch);
+    assert(c_flat < 0.05f);
+    assert(c_peak > 0.9f);
+    // All-zero input must not divide by zero.
+    float zeros[121] = {};
+    assert(TempoEstimator::raw_confidence(zeros, 121, scratch) == 0.0f);
+    printf("PASS: test_raw_confidence_flat_vs_peaked\n");
+}
+
+// Feed observe() n_updates windows containing a clean pulse train at `bpm`.
+// Returns the last estimate.
+static TempoEstimator::Estimate feed_pulse_windows(TempoEstimator &te,
+                                                   float bpm, int n_updates) {
+    float win[TempoEstimator::kWindowLen];
+    const float period = TempoEstimator::kFrameHz * 60.0f / bpm;
+    TempoEstimator::Estimate est{};
+    for (int u = 0; u < n_updates; u++) {
+        for (int i = 0; i < TempoEstimator::kWindowLen; i++) win[i] = 0.0f;
+        // Phase-shift each window so it looks like a sliding stream.
+        float t = std::fmod(static_cast<float>(u) * 37.0f, period);
+        while (t < TempoEstimator::kWindowLen) {
+            win[static_cast<int>(t)] = 10.0f;
+            t += period;
+        }
+        est = te.observe(win, TempoEstimator::kWindowLen);
+    }
+    return est;
+}
+
+void test_observe_locks_on_consistent_evidence() {
+    TempoEstimator te;
+    auto est = feed_pulse_windows(te, 152.0f, 8);
+    assert(est.locked);
+    assert(std::fabs(est.bpm - 152.0f) <= 2.0f);
+    assert(est.confidence > 0.3f);
+    printf("PASS: test_observe_locks_on_consistent_evidence (bpm=%.1f conf=%.2f)\n",
+           est.bpm, est.confidence);
+}
+
+void test_observe_escapes_stale_lock_within_bounded_updates() {
+    TempoEstimator te;
+    feed_pulse_windows(te, 150.0f, 20);          // strong stale lock
+    // New song: 100 BPM. Must relock within 12 updates (~6-8 s of music).
+    auto est = feed_pulse_windows(te, 100.0f, 12);
+    assert(std::fabs(est.bpm - 100.0f) <= 2.0f);
+    assert(est.locked);
+    printf("PASS: test_observe_escapes_stale_lock_within_bounded_updates\n");
+}
+
+void test_observe_zero_window_decays_confidence() {
+    TempoEstimator te;
+    feed_pulse_windows(te, 120.0f, 8);
+    float zeros[TempoEstimator::kWindowLen] = {};
+    TempoEstimator::Estimate est{};
+    for (int u = 0; u < 6; u++) est = te.observe(zeros, TempoEstimator::kWindowLen);
+    assert(est.confidence < 0.3f);
+    printf("PASS: test_observe_zero_window_decays_confidence\n");
+}
+
+void test_observe_sub_grid_resolution() {
+    // 115 and 116 BPM must produce distinct estimates (old code: both -> 114).
+    TempoEstimator te1, te2;
+    auto e1 = feed_pulse_windows(te1, 115.0f, 10);
+    auto e2 = feed_pulse_windows(te2, 116.0f, 10);
+    assert(std::fabs(e1.bpm - 115.0f) <= 1.5f);
+    assert(std::fabs(e2.bpm - 116.0f) <= 1.5f);
+    printf("PASS: test_observe_sub_grid_resolution (%.2f, %.2f)\n", e1.bpm, e2.bpm);
+}
+
 int main() {
     test_grid_constants_consistent();
     test_adaptive_threshold_constant_dc_becomes_zero();
@@ -200,6 +287,12 @@ int main() {
     test_parabolic_offset_centers_peak();
     test_harmonic_score_peaks_at_true_tempo();
     test_no_4_3_alias_from_bar_harmonic();
+    test_tempo_prior_gentle_and_centered();
+    test_raw_confidence_flat_vs_peaked();
+    test_observe_locks_on_consistent_evidence();
+    test_observe_escapes_stale_lock_within_bounded_updates();
+    test_observe_zero_window_decays_confidence();
+    test_observe_sub_grid_resolution();
     printf("ALL TEMPO ESTIMATOR TESTS PASSED\n");
     return 0;
 }

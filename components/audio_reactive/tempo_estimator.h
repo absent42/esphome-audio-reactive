@@ -242,5 +242,89 @@ inline float TempoEstimator::harmonic_score_at(const float *acf, int len, float 
     return score;
 }
 
+inline float TempoEstimator::tempo_prior(float bpm) {
+    if (bpm <= 0.0f) return 0.0f;
+    const float octaves = std::log2(bpm / kPriorCenterBpm);
+    const float z = octaves / kPriorSigmaOctaves;
+    return std::exp(-0.5f * z * z);
+}
+
+inline float TempoEstimator::raw_confidence(const float *score, int n,
+                                            float *scratch) {
+    if (n <= 0) return 0.0f;
+    float peak = 0.0f;
+    for (int i = 0; i < n; i++) {
+        scratch[i] = score[i];
+        if (score[i] > peak) peak = score[i];
+    }
+    if (peak <= 0.0f) return 0.0f;
+    std::nth_element(scratch, scratch + n / 2, scratch + n);
+    const float median = scratch[n / 2];
+    float conf = (peak - median) / peak;
+    if (conf < 0.0f) conf = 0.0f;
+    if (conf > 1.0f) conf = 1.0f;
+    return conf;
+}
+
+inline TempoEstimator::Estimate TempoEstimator::observe(const float *onset_df, int n) {
+    if (n > kWindowLen) n = kWindowLen;
+
+    // 1) Local-mean removal, exactly as the reference pipeline did.
+    std::memcpy(work_, onset_df, n * sizeof(float));
+    adaptive_threshold(work_, n, thresh_scratch_);
+
+    // 2) Balanced autocorrelation.
+    balanced_acf(work_, n, acf_);
+
+    // 3) Harmonic-template score over the BPM grid.
+    float score_sum = 0.0f;
+    for (int c = 0; c < kNumCandidates; c++) {
+        const float bpm = kBpmMin + static_cast<float>(c);
+        score_[c] = harmonic_score_at(acf_, n, bpm);
+        score_sum += score_[c];
+    }
+
+    // 4) Evidence confidence from the RAW score (before prior/smoothing).
+    const float conf_raw = raw_confidence(score_, kNumCandidates, conf_scratch_);
+
+    if (score_sum <= 1e-12f) {
+        // Silence / no evidence: decay confidence, hold tempo, drop stability.
+        conf_ema_ *= 0.7f;
+        stable_count_ = 0;
+        return {current_bpm_, 0.0f, false};
+    }
+
+    // 5) Leaky integration of the prior-weighted, normalised score.
+    for (int c = 0; c < kNumCandidates; c++) {
+        const float bpm = kBpmMin + static_cast<float>(c);
+        const float obs = (score_[c] / score_sum) * tempo_prior(bpm);
+        state_[c] = kSmoothLambda * state_[c] + (1.0f - kSmoothLambda) * obs;
+    }
+
+    // 6) Argmax + parabolic sub-grid refinement.
+    int best = 0;
+    for (int c = 1; c < kNumCandidates; c++)
+        if (state_[c] > state_[best]) best = c;
+    float bpm_est = kBpmMin + static_cast<float>(best);
+    if (best > 0 && best < kNumCandidates - 1) {
+        bpm_est += parabolic_offset(state_[best - 1], state_[best], state_[best + 1]);
+    }
+
+    // 7) Stability gate + confidence EMA.
+    if (last_argmax_bpm_ > 0.0f &&
+        std::fabs(bpm_est - last_argmax_bpm_) <= kStableTolBpm) {
+        stable_count_++;
+    } else {
+        stable_count_ = 1;
+    }
+    last_argmax_bpm_ = bpm_est;
+    conf_ema_ = (1.0f - kConfEmaAlpha) * conf_ema_ + kConfEmaAlpha * conf_raw;
+
+    const bool locked = stable_count_ >= kStableUpdates;
+    if (locked) current_bpm_ = bpm_est;
+    const float conf_out = locked ? conf_ema_ : 0.0f;
+    return {current_bpm_, conf_out, locked};
+}
+
 }  // namespace audio_reactive
 }  // namespace esphome
