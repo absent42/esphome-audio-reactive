@@ -1,6 +1,6 @@
 {
     "name": "Audio Reactive Sensor (Waveshare ESP32-S3 Audio)",
-    "version": "0.4.2",
+    "version": "0.4.3",
     "builds": [
         {
             "chipFamily": "ESP32-S3",
