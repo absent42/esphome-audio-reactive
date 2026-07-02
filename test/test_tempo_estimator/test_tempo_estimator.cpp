@@ -264,14 +264,17 @@ void test_observe_escapes_stale_lock_within_bounded_updates() {
     printf("PASS: test_observe_escapes_stale_lock_within_bounded_updates\n");
 }
 
-void test_observe_zero_window_decays_confidence() {
+void test_observe_zero_window_zeroes_confidence() {
     TempoEstimator te;
     feed_pulse_windows(te, 120.0f, 8);
     float zeros[TempoEstimator::kWindowLen] = {};
-    TempoEstimator::Estimate est{};
-    for (int u = 0; u < 6; u++) est = te.observe(zeros, TempoEstimator::kWindowLen);
-    assert(est.confidence < 0.3f);
-    printf("PASS: test_observe_zero_window_decays_confidence\n");
+    // A zero window carries no evidence: confidence drops to 0 immediately
+    // (there is no EMA decay path any more).
+    auto est = te.observe(zeros, TempoEstimator::kWindowLen);
+    assert(est.confidence == 0.0f);
+    for (int u = 0; u < 5; u++) est = te.observe(zeros, TempoEstimator::kWindowLen);
+    assert(est.confidence == 0.0f);
+    printf("PASS: test_observe_zero_window_zeroes_confidence\n");
 }
 
 void test_observe_recovers_from_nan_window() {
@@ -303,9 +306,10 @@ void test_observe_sub_grid_resolution() {
 
 // Slide a kWindowLen window through a long club envelope, calling observe()
 // every `hop_frames` (simulating per-beat cadence).
-static TempoEstimator::Estimate run_club(float bpm, float seconds) {
+static TempoEstimator::Estimate run_club(float bpm, float seconds,
+                                         uint32_t rng_seed) {
     static float env[8192];
-    rhythm_fixtures::seed(42);
+    rhythm_fixtures::seed(rng_seed);
     int n = rhythm_fixtures::build_club(bpm, seconds, TempoEstimator::kFrameHz,
                                         env, 8192);
     TempoEstimator te;
@@ -317,23 +321,72 @@ static TempoEstimator::Estimate run_club(float bpm, float seconds) {
 }
 
 void test_club_patterns_no_114_150_attractors() {
-    struct Case { float truth; } cases[] = {{115}, {116}, {122}, {128}, {152}, {153}};
+    struct Case { float truth; } cases[] = {{115}, {116}, {122}, {128},
+                                            {152}, {153}};
+    const uint32_t seeds[] = {42, 555, 90210};
     for (auto &c : cases) {
-        auto est = run_club(c.truth, 30.0f);
-        if (std::fabs(est.bpm - c.truth) > 2.0f) {
-            fprintf(stderr, "FAIL: club %.0f BPM -> %.2f (want +-2)\n",
-                    c.truth, est.bpm);
-            assert(false);
+        for (uint32_t s : seeds) {
+            auto est = run_club(c.truth, 30.0f, s);
+            if (std::fabs(est.bpm - c.truth) > 2.0f) {
+                fprintf(stderr, "FAIL: club %.0f BPM seed %u -> %.2f (want +-2)\n",
+                        c.truth, s, est.bpm);
+                assert(false);
+            }
+            // Music must be publishable: confidence comfortably above the 0.3 gate.
+            if (!(est.confidence >= 0.4f)) {
+                fprintf(stderr, "FAIL: club %.0f BPM seed %u conf=%.2f (want >= 0.4)\n",
+                        c.truth, s, est.confidence);
+                assert(false);
+            }
+            printf("  club %.0f seed %u -> %.2f conf=%.2f\n",
+                   c.truth, s, est.bpm, est.confidence);
         }
-        // Music must be publishable: confidence comfortably above the 0.3 gate.
-        if (!(est.confidence >= 0.4f)) {
-            fprintf(stderr, "FAIL: club %.0f BPM conf=%.2f (want >= 0.4)\n",
-                    c.truth, est.confidence);
-            assert(false);
-        }
-        printf("  club %.0f -> %.2f conf=%.2f\n", c.truth, est.bpm, est.confidence);
     }
     printf("PASS: test_club_patterns_no_114_150_attractors\n");
+}
+
+// DOCUMENTED LIMITATION - sub-harmonic locks above ~160 BPM with strong
+// eighth-note content. Measured on 30 s club fixtures (seeds 42/555/90210):
+// 168 -> 112.0-112.1 at conf 0.33 (3:2 alias; the eighth-note hats put ACF
+// peaks on the T/2 grid, the 2/3-tempo candidate's harmonics 1.5T/3T/4.5T/6T
+// all land on that grid, and the 120-centred prior tips the tie), and
+// 176 -> 88.0 / 117.3 at conf 0.00-0.34 (2:1 or 3:2 depending on seed). A
+// half-lag template term (score += w * acf[0.5 * lag], w swept over
+// [0.3, 0.8]) was tried and reverted: the HALF-tempo candidate's half-lag is
+// the true beat lag T - always the strongest ACF peak - so the term flipped
+// 168 -> 84 and even the eighth-free 150 metronome -> 75 at every weight.
+// The alias confidence (up to 0.34) sits marginally above the 0.3 publish
+// gate, so the sensor may publish the sub-harmonic for such material; this
+// test pins the failure to a harmonic fraction of the truth with marginal
+// confidence so any drift is caught.
+void test_club_high_tempo_subharmonic_documented_limitation() {
+    struct Case { float truth; } cases[] = {{168}, {176}};
+    const uint32_t seeds[] = {42, 555, 90210};
+    for (auto &c : cases) {
+        for (uint32_t s : seeds) {
+            auto est = run_club(c.truth, 30.0f, s);
+            const bool correct  = std::fabs(est.bpm - c.truth) <= 2.0f;
+            const bool alias_23 = std::fabs(est.bpm - c.truth * (2.0f / 3.0f)) <= 2.5f;
+            const bool alias_12 = std::fabs(est.bpm - c.truth * 0.5f) <= 2.5f;
+            if (!(correct || alias_23 || alias_12)) {
+                fprintf(stderr,
+                        "FAIL: club %.0f seed %u -> %.2f (neither truth nor a "
+                        "documented 2:3 / 1:2 sub-harmonic)\n",
+                        c.truth, s, est.bpm);
+                assert(false);
+            }
+            // When aliased, confidence must stay marginal (measured <= 0.34).
+            if (!correct && !(est.confidence <= 0.40f)) {
+                fprintf(stderr, "FAIL: club %.0f seed %u aliased to %.2f with "
+                        "conf %.2f (> 0.40)\n", c.truth, s, est.bpm, est.confidence);
+                assert(false);
+            }
+            printf("  club %.0f seed %u -> %.2f conf=%.2f (%s)\n",
+                   c.truth, s, est.bpm, est.confidence,
+                   correct ? "correct" : "documented sub-harmonic");
+        }
+    }
+    printf("PASS: test_club_high_tempo_subharmonic_documented_limitation\n");
 }
 
 void test_speech_noise_stays_unconfident() {
@@ -370,10 +423,11 @@ int main() {
     test_peak_mass_fraction_flat_vs_spiked();
     test_observe_locks_on_consistent_evidence();
     test_observe_escapes_stale_lock_within_bounded_updates();
-    test_observe_zero_window_decays_confidence();
+    test_observe_zero_window_zeroes_confidence();
     test_observe_recovers_from_nan_window();
     test_observe_sub_grid_resolution();
     test_club_patterns_no_114_150_attractors();
+    test_club_high_tempo_subharmonic_documented_limitation();
     test_speech_noise_stays_unconfident();
     printf("ALL TEMPO ESTIMATOR TESTS PASSED\n");
     return 0;

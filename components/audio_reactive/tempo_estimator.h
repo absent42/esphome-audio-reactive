@@ -60,6 +60,18 @@ class TempoEstimator {
     static constexpr int   kNumHarmonics = 4;
     static constexpr float kHarmonicWeights[kNumHarmonics] = {1.0f, 0.6f, 0.4f, 0.3f};
 
+    // KNOWN LIMITATION - 3:2 sub-harmonic above ~160 BPM with strong
+    // eighth-note content: hats put ACF peaks on the T/2 grid, so the
+    // 2/3-tempo alias's harmonics (1.5T, 3T, 4.5T, 6T) all land on that
+    // grid and the 120-centred prior tips the tie toward the alias
+    // (measured on 30 s club fixtures: 168 BPM -> 112.0 at conf 0.33,
+    // 176 -> 117.35 at conf 0.34). A half-lag template term
+    // (score += w * acf[0.5*lag], w in [0.3, 0.8]) was tried and reverted:
+    // the HALF-tempo candidate's half-lag is the true beat lag T - always
+    // the strongest ACF peak - so the term flipped 168 -> 84 and even the
+    // eighth-free 150 metronome -> 75 at every weight in range. See the
+    // Deferred section of docs/plans/2026-07-02-tempo-induction-rewrite.md.
+
     // Log-normal tempo prior.
     static constexpr float kPriorCenterBpm   = 120.0f;
     static constexpr float kPriorSigmaOctaves = 1.0f;
@@ -90,7 +102,11 @@ class TempoEstimator {
     struct Estimate {
         float bpm;         // best tempo estimate (parabolically refined)
         float confidence;  // 0..1; 0 until argmax is stable
-        bool  locked;      // stability gate satisfied
+        // Stability gate satisfied: the argmax was stable across the last
+        // kStableUpdates updates. NOT "music present" - on noise the prior
+        // stabilises the argmax near 120 BPM, so locked can be true; only
+        // the mass-fraction confidence discriminates music from noise.
+        bool  locked;
     };
 
     TempoEstimator() { reset(); }

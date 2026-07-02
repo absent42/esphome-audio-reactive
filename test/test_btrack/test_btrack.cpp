@@ -217,19 +217,59 @@ void test_warmup_suppresses_confidence() {
 void test_club_115_and_152_do_not_alias() {
     static float env[8192];
     struct Case { float truth; } cases[] = {{115}, {152}};
+    const uint32_t seeds[] = {42, 555, 90210};
     for (auto &c : cases) {
-        rhythm_fixtures::seed(42);
-        int n = rhythm_fixtures::build_club(c.truth, 30.0f, BTrack::kFrameHz,
-                                            env, 8192);
-        float conf = 0.0f;
-        float bpm = feed_env_get_final_bpm(env, n, &conf);
-        if (std::fabs(bpm - c.truth) > 2.5f) {
-            fprintf(stderr, "FAIL: club %.0f -> %.1f BPM (want +-2.5)\n",
-                    c.truth, bpm);
-            assert(false);
+        for (uint32_t s : seeds) {
+            rhythm_fixtures::seed(s);
+            int n = rhythm_fixtures::build_club(c.truth, 30.0f, BTrack::kFrameHz,
+                                                env, 8192);
+            float conf = 0.0f;
+            float bpm = feed_env_get_final_bpm(env, n, &conf);
+            if (std::fabs(bpm - c.truth) > 2.5f) {
+                fprintf(stderr, "FAIL: club %.0f seed %u -> %.1f BPM (want +-2.5)\n",
+                        c.truth, s, bpm);
+                assert(false);
+            }
         }
     }
     printf("PASS: test_club_115_and_152_do_not_alias\n");
+}
+
+// DOCUMENTED LIMITATION - sub-harmonic locks above ~160 BPM with strong
+// eighth-note content (full-pipeline mirror of the TempoEstimator test of
+// the same name; see test_tempo_estimator.cpp for the mechanism and the
+// reverted half-lag experiment). Measured: 168 -> 112.0-112.1 at conf 0.33
+// (3:2 alias, above the 0.3 publish gate), 176 -> 88.0 / 117.3 at conf
+// 0.00-0.34 depending on seed. This pins the failure to a harmonic fraction
+// of the truth with marginal confidence so any drift is caught.
+void test_club_high_tempo_subharmonic_documented_limitation() {
+    static float env[8192];
+    struct Case { float truth; } cases[] = {{168}, {176}};
+    const uint32_t seeds[] = {42, 555, 90210};
+    for (auto &c : cases) {
+        for (uint32_t s : seeds) {
+            rhythm_fixtures::seed(s);
+            int n = rhythm_fixtures::build_club(c.truth, 30.0f, BTrack::kFrameHz,
+                                                env, 8192);
+            float conf = 0.0f;
+            float bpm = feed_env_get_final_bpm(env, n, &conf);
+            const bool correct  = std::fabs(bpm - c.truth) <= 2.5f;
+            const bool alias_23 = std::fabs(bpm - c.truth * (2.0f / 3.0f)) <= 2.5f;
+            const bool alias_12 = std::fabs(bpm - c.truth * 0.5f) <= 2.5f;
+            if (!(correct || alias_23 || alias_12)) {
+                fprintf(stderr,
+                        "FAIL: club %.0f seed %u -> %.1f BPM (neither truth nor "
+                        "a documented 2:3 / 1:2 sub-harmonic)\n", c.truth, s, bpm);
+                assert(false);
+            }
+            if (!correct && !(conf <= 0.40f)) {
+                fprintf(stderr, "FAIL: club %.0f seed %u aliased to %.1f with "
+                        "conf %.2f (> 0.40)\n", c.truth, s, bpm, conf);
+                assert(false);
+            }
+        }
+    }
+    printf("PASS: test_club_high_tempo_subharmonic_documented_limitation\n");
 }
 
 void test_tempo_change_relocks_within_15s() {
@@ -288,6 +328,7 @@ int main() {
     test_locks_on_150_bpm_via_full_pipeline();
     test_warmup_suppresses_confidence();
     test_club_115_and_152_do_not_alias();
+    test_club_high_tempo_subharmonic_documented_limitation();
     test_tempo_change_relocks_within_15s();
     test_speech_noise_publishes_zero();
     printf("ALL BTRACK UNIT TESTS PASSED\n");

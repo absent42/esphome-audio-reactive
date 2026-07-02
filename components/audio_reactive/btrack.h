@@ -149,6 +149,19 @@ class BTrack {
     void update_tempo_estimate_();
 };
 
+// TempoEstimator contract: BTrack hands its whole onset ring to
+// TempoEstimator::observe() and publishes the estimator's BPM range, so the
+// two classes' constants must agree (all are literals, so the float
+// comparisons are exact).
+static_assert(BTrack::kHistoryLen == TempoEstimator::kWindowLen,
+              "BTrack ring length must match TempoEstimator window length");
+static_assert(BTrack::kBpmMin == TempoEstimator::kBpmMin,
+              "BTrack::kBpmMin must mirror TempoEstimator::kBpmMin");
+static_assert(BTrack::kBpmMax == TempoEstimator::kBpmMax,
+              "BTrack::kBpmMax must mirror TempoEstimator::kBpmMax");
+static_assert(BTrack::kFrameHz == TempoEstimator::kFrameHz,
+              "BTrack::kFrameHz must match TempoEstimator::kFrameHz");
+
 // ----------------------------------------------------------------------
 // Implementation — single-header inline.
 // ----------------------------------------------------------------------
@@ -318,10 +331,12 @@ inline void BTrack::update_tempo_estimate_() {
 
     const auto est = tempo_est_.observe(acf_buf_, kHistoryLen);
 
-    // Warmup: the ring is mostly zeros for the first ~6 s; estimates made
-    // on it are unreliable, so suppress confidence (the component publishes
-    // 0 BPM below kSilenceConfidence) while still letting the estimator's
-    // internal state build up.
+    // Warmup: this gate covers the first ~3 s while the ring fills (a full
+    // window takes ~6 s); estimates made on a mostly-zero ring are
+    // unreliable, so suppress confidence (the component publishes 0 BPM
+    // below kSilenceConfidence) while still letting the estimator's
+    // internal state build up. The estimator's own stability gate covers
+    // the remainder of the fill.
     if (frames_since_reset_ < kWarmupFrames) {
         current_confidence_ = 0.0f;
         return;
